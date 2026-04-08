@@ -16,6 +16,7 @@ load_dotenv()
 
 class AgentState(TypedDict, total=False):
     package_name: str
+    package_source: str
     manager: str
     session_id: str
     spin_response: Dict[str, Any]
@@ -95,10 +96,16 @@ async def node_spin_up(state: AgentState) -> AgentState:
 async def node_install(state: AgentState) -> AgentState:
     if state.get("error"):
         return {"mcp_session": state["mcp_session"]}
+    install_args: Dict[str, Any] = {"manager": state["manager"]}
+    if state.get("package_source"):
+        install_args["package_source"] = state["package_source"]
+    else:
+        install_args["package_name"] = state["package_name"]
+
     resp = await _call_mcp_tool(
         state["mcp_session"],
         "execute_install",
-        {"package_name": state["package_name"], "manager": state["manager"]},
+        install_args,
     )
     next_state: AgentState = {"install_response": resp, "mcp_session": state["mcp_session"]}
     if not resp.get("ok"):
@@ -207,7 +214,13 @@ def _looks_like_expected_npm_install_noise(telemetry: Dict[str, Any], manager: s
 
     classification = telemetry.get("classification") or {}
     suspicious_indicators = classification.get("suspicious_indicators") or []
-    if suspicious_indicators:
+    # Allow the specific generic indicator emitted for web-port outbound:
+    # "Outbound TCP destinations observed: 443"
+    # This alone should not force suspicious for normal npm registry traffic.
+    non_generic_indicators = [
+        s for s in suspicious_indicators if "outbound tcp destinations observed" not in str(s).lower()
+    ]
+    if non_generic_indicators:
         return False
     return True
 
@@ -369,7 +382,11 @@ def _build_graph():
     return graph.compile()
 
 
-async def _run_hazmat_audit_async(package_name: str, manager: str = "pip") -> Dict[str, Any]:
+async def _run_hazmat_audit_async(
+    package_name: str,
+    manager: str = "pip",
+    package_source: Optional[str] = None,
+) -> Dict[str, Any]:
     app = _build_graph()
     server_params = StdioServerParameters(
         command=sys.executable,
@@ -381,12 +398,14 @@ async def _run_hazmat_audit_async(package_name: str, manager: str = "pip") -> Di
             await session.initialize()
             initial: AgentState = {
                 "package_name": package_name,
+                "package_source": package_source or "",
                 "manager": manager,
                 "mcp_session": session,
             }
             result = await app.ainvoke(initial)
             return {
                 "package_name": package_name,
+                "package_source": result.get("package_source"),
                 "manager": manager,
                 "session_id": result.get("session_id"),
                 "spin_response": result.get("spin_response"),
@@ -400,14 +419,21 @@ async def _run_hazmat_audit_async(package_name: str, manager: str = "pip") -> Di
             }
 
 
-def run_hazmat_audit(package_name: str, manager: str = "pip") -> Dict[str, Any]:
+def run_hazmat_audit(package_name: str, manager: str = "pip", package_source: Optional[str] = None) -> Dict[str, Any]:
     import asyncio
 
-    return asyncio.run(_run_hazmat_audit_async(package_name=package_name, manager=manager))
+    return asyncio.run(
+        _run_hazmat_audit_async(
+            package_name=package_name,
+            manager=manager,
+            package_source=package_source,
+        )
+    )
 
 
 if __name__ == "__main__":
     pkg = os.getenv("HAZMAT_PACKAGE", "requests")
+    pkg_source = os.getenv("HAZMAT_PACKAGE_SOURCE")
     mgr = os.getenv("HAZMAT_MANAGER", "pip")
-    output = run_hazmat_audit(package_name=pkg, manager=mgr)
+    output = run_hazmat_audit(package_name=pkg, manager=mgr, package_source=pkg_source)
     print(json.dumps(output, indent=2, sort_keys=True))

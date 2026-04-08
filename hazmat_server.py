@@ -22,7 +22,6 @@ from sandbox_core import (
 # Initialize the MCP Server
 mcp = FastMCP("Hazmat-Security-Scanner")
 
-EXPECTED_OUTBOUND_PORTS = {80, 443}
 EXPECTED_NPM_PATH_MARKERS = (
     "/root/.npm/",
     "/usr/local/lib/node_modules/",
@@ -288,18 +287,26 @@ def get_telemetry() -> str:
     tcp6_added = _diff_added(before_tcp6, after_tcp6)
     network_verdict = "clean"
     all_added_tcp = tcp_added + tcp6_added
-    unusual_outbound = [c for c in all_added_tcp if (c or {}).get("remote_port") not in EXPECTED_OUTBOUND_PORTS]
+    web_port_outbound = [c for c in all_added_tcp if (c or {}).get("remote_port") in {80, 443}]
+    unusual_outbound = [c for c in all_added_tcp if (c or {}).get("remote_port") not in {80, 443}]
     if all_added_tcp:
+        # IMPORTANT: 80/443 traffic can still be exfiltration over HTTP(S).
+        # Treat any new outbound as security-relevant; keep details for higher-level reasoning.
+        network_verdict = "suspicious"
+        alerts.append("Suspicious Outbound Connection: New outbound TCP connections observed after install phase.")
+        suspicious_indicators.append(
+            "Outbound TCP destinations observed: "
+            + ", ".join(str((c or {}).get("remote_port")) for c in all_added_tcp[:8])
+        )
         if unusual_outbound:
-            network_verdict = "suspicious"
-            alerts.append("Suspicious Outbound Connection: Unusual destination ports observed after install phase.")
             suspicious_indicators.append(
-                "Outbound TCP connections include uncommon ports: "
+                "Outbound TCP includes uncommon destination ports: "
                 + ", ".join(str((c or {}).get("remote_port")) for c in unusual_outbound[:5])
             )
-        else:
-            network_verdict = "expected"
-            expected_activity.append("Outbound TCP is limited to expected web ports (80/443) used by package installers.")
+        elif web_port_outbound:
+            expected_activity.append(
+                "Outbound traffic uses web ports (80/443); verify destination context because HTTPS can still carry exfiltration."
+            )
 
     # 2) Filesystem diff
     fs_changed = baseline.fs_snapshot != after.fs_snapshot
@@ -346,7 +353,7 @@ def get_telemetry() -> str:
     if install_exit not in (None, 0):
         suspicious_indicators.append(f"Install command failed with exit code {install_exit}.")
 
-    if unusual_outbound and fs_has_credential_markers:
+    if all_added_tcp and fs_has_credential_markers:
         risk_level = "critical"
     elif unusual_outbound and fs_changed:
         risk_level = "critical"
@@ -354,6 +361,8 @@ def get_telemetry() -> str:
         risk_level = "high"
     elif unusual_outbound:
         risk_level = "high"
+    elif all_added_tcp:
+        risk_level = "medium"
     elif fs_has_credential_markers:
         risk_level = "high"
     elif suspicious_install_artifacts:

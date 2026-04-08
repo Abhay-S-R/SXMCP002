@@ -136,3 +136,24 @@ The script sets:
 - `PIP_RETRIES=0`
 
 and wraps `python3 agent.py` with a hard timeout.
+
+## Step 6: CLI wrapper
+
+Use the CLI for demo-friendly output:
+
+```bash
+source .venv/bin/activate
+python3 hazmat_cli.py --package requests --manager pip
+```
+
+Raw JSON mode:
+
+```bash
+python3 hazmat_cli.py --package requests --manager pip --raw-json
+```
+
+Custom timeout:
+
+```bash
+python3 hazmat_cli.py --package requests --manager npm --timeout 120
+```
