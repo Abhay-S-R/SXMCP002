@@ -124,7 +124,7 @@ async def node_install(state: AgentState) -> AgentState:
     resp = await _call_mcp_tool(
         state["mcp_session"],
         "execute_install",
-        install_args,
+        {"session_id": state.get("session_id"), **install_args},
     )
     next_state: AgentState = {
         "install_response": resp,
@@ -140,7 +140,11 @@ async def node_get_telemetry(state: AgentState) -> AgentState:
     if state.get("error"):
         return {"mcp_session": state["mcp_session"], "progress_callback": state.get("progress_callback")}
     _emit_progress(state, "Collecting runtime telemetry")
-    resp = await _call_mcp_tool(state["mcp_session"], "get_telemetry", {})
+    resp = await _call_mcp_tool(
+        state["mcp_session"],
+        "get_telemetry",
+        {"session_id": state.get("session_id")},
+    )
     next_state: AgentState = {
         "telemetry_response": resp,
         "mcp_session": state["mcp_session"],

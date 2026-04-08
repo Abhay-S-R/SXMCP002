@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import tarfile
+import threading
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -12,8 +13,6 @@ from mcp.server.fastmcp import FastMCP
 from sandbox_core import (
     Baseline,
     docker_client,
-    active_sandbox,
-    _get_container,
     _exec,
     _snapshot_baseline,
     _parse_proc_net_tcp,
@@ -54,6 +53,30 @@ SUSPICIOUS_CREDENTIAL_PATH_MARKERS = (
     "/passwd",
 )
 SUSPICIOUS_INSTALL_ARTIFACT_KEYWORDS = ("marker", "beacon", "token", "secret", "keydump")
+
+# Multi-session sandbox state: keyed by session_id.
+_SANDBOX_LOCK = threading.RLock()
+_ACTIVE_SANDBOXES: Dict[str, Dict[str, Any]] = {}
+
+
+def _first_session_id() -> Optional[str]:
+    return next(iter(_ACTIVE_SANDBOXES.keys()), None)
+
+
+def _resolve_session_id(explicit_session_id: Optional[str]) -> Optional[str]:
+    if explicit_session_id:
+        return explicit_session_id
+    return _first_session_id()
+
+
+def _get_session_state(session_id: Optional[str]) -> tuple[Optional[str], Optional[Dict[str, Any]], Optional[str]]:
+    resolved = _resolve_session_id(session_id)
+    if not resolved:
+        return None, None, "No active sandbox. Call spin_up_sandbox first."
+    state = _ACTIVE_SANDBOXES.get(resolved)
+    if not state:
+        return resolved, None, f"Unknown session_id: {resolved}"
+    return resolved, state, None
 
 
 def _resp(ok: bool, action: str, **payload: Any) -> str:
@@ -121,15 +144,21 @@ def spin_up_sandbox(
         if base_image is None:
             base_image = "node:20-slim" if manager == "npm" else "python:3.11-slim"
 
-        if active_sandbox.get("id"):
-            return _resp(
-                False,
-                "spin_up_sandbox",
-                error="sandbox_already_active",
-                message="Sandbox already active",
-                session_id=active_sandbox.get("session_id"),
-                container_id=active_sandbox.get("id"),
-            )
+        resolved_session_id = (session_id or str(uuid.uuid4())).strip()
+        if not resolved_session_id:
+            return _resp(False, "spin_up_sandbox", error="invalid_session_id", message="session_id cannot be empty.")
+
+        with _SANDBOX_LOCK:
+            if resolved_session_id in _ACTIVE_SANDBOXES:
+                existing = _ACTIVE_SANDBOXES[resolved_session_id]
+                return _resp(
+                    False,
+                    "spin_up_sandbox",
+                    error="session_already_active",
+                    message="Sandbox already active for this session_id.",
+                    session_id=resolved_session_id,
+                    container_id=existing.get("id"),
+                )
 
         container = docker_client.containers.run(
             base_image,
@@ -140,12 +169,14 @@ def spin_up_sandbox(
             mem_limit="512m", # Limit resources
             security_opt=["no-new-privileges:true"] # Basic hardening
         )
-        resolved_session_id = (session_id or str(uuid.uuid4())).strip()
-        active_sandbox["id"] = container.id
-        active_sandbox["manager"] = manager
-        active_sandbox["session_id"] = resolved_session_id
-        active_sandbox["baseline"] = None
-        active_sandbox["install"] = None
+        with _SANDBOX_LOCK:
+            _ACTIVE_SANDBOXES[resolved_session_id] = {
+                "id": container.id,
+                "manager": manager,
+                "session_id": resolved_session_id,
+                "baseline": None,
+                "install": None,
+            }
         return _resp(
             True,
             "spin_up_sandbox",
@@ -160,17 +191,19 @@ def spin_up_sandbox(
 
 @mcp.tool()
 def execute_install(
+    session_id: Optional[str] = None,
     package_name: Optional[str] = None,
     manager: Optional[str] = None,
     package_source: Optional[str] = None,
 ) -> str:
     """Install a package inside the sandbox and capture the terminal output."""
-    if not active_sandbox.get("id"):
-        return _resp(False, "execute_install", error="no_active_sandbox", message="Call spin_up_sandbox first.")
+    resolved_session_id, session_state, session_err = _get_session_state(session_id)
+    if session_err:
+        return _resp(False, "execute_install", error="no_active_sandbox", message=session_err)
+    assert session_state is not None
+    container = docker_client.containers.get(session_state["id"])
 
-    container = _get_container()
-
-    chosen_manager = (manager or active_sandbox.get("manager") or "pip").lower().strip()
+    chosen_manager = (manager or session_state.get("manager") or "pip").lower().strip()
     if chosen_manager not in {"pip", "npm"}:
         return _resp(False, "execute_install", error="invalid_manager", message="Use 'pip' or 'npm'.")
 
@@ -210,14 +243,15 @@ def execute_install(
             install_cmd = ["pip", "install", install_target, "--no-cache-dir"]
 
         # Capture baseline BEFORE install so telemetry can be a diff.
-        if active_sandbox.get("baseline") is None:
-            active_sandbox["baseline"] = _snapshot_baseline(container)
+        with _SANDBOX_LOCK:
+            if session_state.get("baseline") is None:
+                session_state["baseline"] = _snapshot_baseline(container)
 
         exit_code, output = _exec(container, install_cmd, timeout_s=300)
         out_text = output.decode("utf-8", errors="replace")
         if len(out_text) > 4000:
             out_text = out_text[:4000] + "\n…(truncated)…"
-        active_sandbox["install"] = {
+        session_state["install"] = {
             "package_name": pkg or None,
             "package_source": source or None,
             "source_mode": source_mode,
@@ -230,8 +264,8 @@ def execute_install(
         return _resp(
             True,
             "execute_install",
-            session_id=active_sandbox.get("session_id"),
-            install=active_sandbox["install"],
+            session_id=resolved_session_id,
+            install=session_state["install"],
             package=pkg or None,
             package_source=source or None,
             manager=chosen_manager,
@@ -244,23 +278,24 @@ def execute_install(
             False,
             "execute_install",
             error="install_failed",
-            session_id=active_sandbox.get("session_id"),
+            session_id=resolved_session_id,
             message=f"Installation failed: {str(e)}",
         )
 
 @mcp.tool()
-def get_telemetry() -> str:
+def get_telemetry(session_id: Optional[str] = None) -> str:
     """
     Analyzes the container's behavior: checks network connections and file system changes.
     This is the most critical function for detecting malware.
     """
-    if not active_sandbox.get("id"):
+    resolved_session_id, session_state, session_err = _get_session_state(session_id)
+    if session_err:
         return _resp(
             False,
             "get_telemetry",
             error="no_active_sandbox",
             telemetry={
-                "session_id": None,
+                "session_id": resolved_session_id,
                 "install": None,
                 "network": {"verdict": "unknown", "tcp_added": [], "tcp6_added": []},
                 "filesystem": {"changed": False, "before_tail": [], "after_tail": []},
@@ -272,11 +307,12 @@ def get_telemetry() -> str:
             },
         )
 
-    container = _get_container()
-    baseline: Optional[Baseline] = active_sandbox.get("baseline")
+    assert session_state is not None
+    container = docker_client.containers.get(session_state["id"])
+    baseline: Optional[Baseline] = session_state.get("baseline")
     if baseline is None:
         baseline = _snapshot_baseline(container)
-        active_sandbox["baseline"] = baseline
+        session_state["baseline"] = baseline
 
     after = _snapshot_baseline(container)
     
@@ -321,11 +357,11 @@ def get_telemetry() -> str:
     after_paths = set(_extract_snapshot_paths(after.fs_snapshot))
     added_paths = sorted(after_paths - before_paths)
     added_blob = "\n".join(added_paths)
-    manager = (active_sandbox.get("manager") or "").lower()
+    manager = (session_state.get("manager") or "").lower()
     expected_markers = EXPECTED_NPM_PATH_MARKERS if manager == "npm" else EXPECTED_PIP_PATH_MARKERS
     fs_has_credential_markers = _contains_any_marker(added_blob, SUSPICIOUS_CREDENTIAL_PATH_MARKERS)
     fs_has_expected_markers = _contains_any_marker(added_blob, expected_markers)
-    install_meta = active_sandbox.get("install") or {}
+    install_meta = session_state.get("install") or {}
     source_mode = (install_meta.get("source_mode") or "").lower()
     suspicious_install_artifacts = [
         p
@@ -383,7 +419,7 @@ def get_telemetry() -> str:
     summary = "No suspicious activity detected." if not alerts else f"{len(alerts)} suspicious activities detected."
 
     telemetry = {
-        "session_id": active_sandbox.get("session_id"),
+        "session_id": resolved_session_id,
         "install": install_meta,
         "network": {
             "verdict": network_verdict,
@@ -415,33 +451,21 @@ def get_telemetry() -> str:
 @mcp.tool()
 def nuke_sandbox(session_id: Optional[str] = None) -> str:
     """Kill and remove the Docker container, cleaning up all evidence."""
-    if not active_sandbox.get("id"):
-        return _resp(True, "nuke_sandbox", session_id=None, message="No active sandbox.")
-    
-    if session_id and session_id != active_sandbox.get("session_id"):
-        return _resp(
-            False,
-            "nuke_sandbox",
-            error="session_mismatch",
-            expected_session_id=active_sandbox.get("session_id"),
-            provided_session_id=session_id,
-            message="Session ID mismatch.",
-        )
-    
-    old_session = active_sandbox.get("session_id")
+    resolved_session_id, session_state, session_err = _get_session_state(session_id)
+    if session_err:
+        return _resp(True, "nuke_sandbox", session_id=resolved_session_id, message="No active sandbox.")
+    assert session_state is not None
+
     try:
-        container = _get_container()
+        container = docker_client.containers.get(session_state["id"])
         container.kill()
         container.remove()
     except Exception:
         pass # ignore if already destroyed
-        
-    active_sandbox["id"] = None
-    active_sandbox["manager"] = None
-    active_sandbox["session_id"] = None
-    active_sandbox["baseline"] = None
-    active_sandbox["install"] = None
-    return _resp(True, "nuke_sandbox", session_id=old_session, message="Sandbox destroyed. All evidence has been eliminated.")
+
+    with _SANDBOX_LOCK:
+        _ACTIVE_SANDBOXES.pop(resolved_session_id, None)
+    return _resp(True, "nuke_sandbox", session_id=resolved_session_id, message="Sandbox destroyed. All evidence has been eliminated.")
 
 if __name__ == "__main__":
     # Run the server via standard input/output for Claude Desktop or other MCP clients

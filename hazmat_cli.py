@@ -288,33 +288,91 @@ def _run_with_timeout(
         }
 
 
+def _load_batch_specs(batch_file: str, default_manager: str) -> List[Dict[str, str]]:
+    specs: List[Dict[str, str]] = []
+    with open(batch_file, "r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            target = parts[0]
+            manager = parts[1].lower() if len(parts) > 1 and parts[1] else default_manager
+            if manager not in {"pip", "npm"}:
+                manager = default_manager
+            if target.endswith(".tgz"):
+                specs.append({"package_name": "local-artifact", "package_source": target, "manager": manager})
+            else:
+                specs.append({"package_name": target, "package_source": "", "manager": manager})
+    return specs
+
+
+def _print_batch_summary(results: List[Dict[str, Any]]) -> None:
+    _section("Batch Summary")
+    rows: List[str] = []
+    for item in results:
+        verdict = ((item.get("final_verdict") or {}).get("verdict") or "unknown").upper()
+        risk = ((item.get("final_verdict") or {}).get("risk_level") or "unknown").upper()
+        target = item.get("package_source") or item.get("package_name")
+        rows.append(f"{target} | {item.get('manager')} | {verdict}/{risk}")
+    _box("Results", rows or ["No batch results."])
+    print()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Hazmat-MCP CLI wrapper for package audits")
     parser.add_argument("--package", help="Package name (PyPI/npm)")
     parser.add_argument("--package-source", help="Local package artifact path (e.g. .tgz)")
+    parser.add_argument("--batch-file", help="File with targets to scan (format: target[,manager])")
+    parser.add_argument("--parallel", type=int, default=1, help="Parallel workers for --batch-file mode")
     parser.add_argument("--manager", choices=["pip", "npm"], default="pip", help="Package manager")
     parser.add_argument("--timeout", type=int, default=180, help="Overall agent timeout in seconds")
     parser.add_argument("--raw-json", action="store_true", help="Print full JSON result")
     args = parser.parse_args()
 
-    if not args.package and not args.package_source:
-        parser.error("Provide either --package or --package-source.")
-    if args.package and args.package_source:
-        parser.error("Use only one of --package or --package-source.")
-
-    package_name = args.package or "local-artifact"
-    result = _run_with_timeout(
-        package_name,
-        args.manager,
-        args.timeout,
-        args.package_source,
-        show_progress=not args.raw_json,
-    )
-
-    if args.raw_json:
-        print(json.dumps(result, indent=2, sort_keys=True))
+    if args.batch_file:
+        if args.package or args.package_source:
+            parser.error("Use --batch-file by itself (do not combine with --package/--package-source).")
+        specs = _load_batch_specs(args.batch_file, args.manager)
+        if not specs:
+            parser.error("Batch file is empty or has no valid targets.")
+        workers = max(1, min(args.parallel, 8))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [
+                pool.submit(
+                    _run_with_timeout,
+                    spec["package_name"],
+                    spec["manager"],
+                    args.timeout,
+                    spec["package_source"] or None,
+                    False,
+                )
+                for spec in specs
+            ]
+            results = [f.result() for f in futures]
+        if args.raw_json:
+            print(json.dumps({"mode": "batch", "results": results}, indent=2, sort_keys=True))
+        else:
+            _print_batch_summary(results)
     else:
-        _print_human(result)
+        if not args.package and not args.package_source:
+            parser.error("Provide either --package or --package-source.")
+        if args.package and args.package_source:
+            parser.error("Use only one of --package or --package-source.")
+
+        package_name = args.package or "local-artifact"
+        result = _run_with_timeout(
+            package_name,
+            args.manager,
+            args.timeout,
+            args.package_source,
+            show_progress=not args.raw_json,
+        )
+
+        if args.raw_json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            _print_human(result)
 
 
 if __name__ == "__main__":

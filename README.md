@@ -166,6 +166,20 @@ Custom timeout:
 python3 hazmat_cli.py --package requests --manager npm --timeout 120
 ```
 
+Batch parallel mode (target[,manager] per line):
+
+```bash
+cat > batch_targets.txt <<'EOF'
+lodash,npm
+requests,pip
+this-package-should-not-exist-xyz123,pip
+demo_packages/react-helper-dom/react-helper-dom-1.0.0.tgz,npm
+EOF
+
+python3 hazmat_cli.py --batch-file batch_targets.txt --parallel 4
+python3 hazmat_cli.py --batch-file batch_targets.txt --parallel 4 --raw-json
+```
+
 ## Step 7: Integration hardening
 
 Run deterministic hardening checks:
