@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import sys
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any, Dict, List
 
@@ -11,6 +12,12 @@ from agent import run_hazmat_audit
 def _supports_color() -> bool:
     if os.getenv("NO_COLOR"):
         return False
+    # On Windows, TERM is not set — use platform check instead.
+    if sys.platform == "win32":
+        # Enable VT100 ANSI processing in Windows 10+ terminals (cmd.exe, PowerShell).
+        # os.system("") is a no-op that triggers the Win32 console to switch to VT mode.
+        os.system("")
+        return True
     return os.getenv("TERM") not in (None, "", "dumb")
 
 
