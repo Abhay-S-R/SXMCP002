@@ -5,10 +5,18 @@ import re
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, wait
 from typing import Any, Dict, List
 
 from agent import run_hazmat_audit
+
+try:
+    from rich.live import Live
+    from rich.table import Table
+
+    _HAS_RICH = True
+except Exception:
+    _HAS_RICH = False
 
 
 def _supports_color() -> bool:
@@ -197,6 +205,7 @@ def _run_with_timeout(
     timeout_seconds: int,
     package_source: str | None = None,
     show_progress: bool = True,
+    external_progress_callback: Any = None,
 ) -> Dict[str, Any]:
     spinner_frames = ["|", "/", "-", "\\"]
     phase_order = [
@@ -217,6 +226,11 @@ def _run_with_timeout(
                 progress["phase_started_at"] = time.time()
             progress["message"] = msg
             progress["phase_num"] = phase_index.get(msg, 0)
+        if external_progress_callback:
+            try:
+                external_progress_callback(msg)
+            except Exception:
+                pass
 
     def _draw_spinner(frame_idx: int, run_started_at: float) -> None:
         if not _supports_color():
@@ -325,6 +339,116 @@ def _print_batch_summary(results: List[Dict[str, Any]]) -> None:
     print()
 
 
+def _run_batch_live_dashboard(specs: List[Dict[str, str]], timeout_s: int, workers: int) -> List[Dict[str, Any]]:
+    lock = threading.Lock()
+    started = time.time()
+    states: List[Dict[str, Any]] = []
+    for spec in specs:
+        target = spec["package_source"] or spec["package_name"]
+        states.append(
+            {
+                "target": target,
+                "manager": spec["manager"],
+                "phase": "queued",
+                "status": "queued",
+                "elapsed": 0.0,
+                "verdict": "-",
+                "risk": "-",
+                "started_at": None,
+            }
+        )
+
+    def _make_table() -> Table:
+        table = Table(title="Hazmat-MCP Live Batch Audit", expand=True)
+        table.add_column("#", style="cyan", width=3)
+        table.add_column("Target", style="white")
+        table.add_column("Manager", style="magenta", width=8)
+        table.add_column("Phase", style="yellow", width=30)
+        table.add_column("Status", width=10)
+        table.add_column("Elapsed", justify="right", width=9)
+        table.add_column("Verdict/Risk", width=18)
+        with lock:
+            for idx, st in enumerate(states, start=1):
+                status = st["status"]
+                if status == "done":
+                    status_cell = "[green]done[/green]"
+                elif status in {"error", "timeout"}:
+                    status_cell = f"[red]{status}[/red]"
+                elif status == "running":
+                    status_cell = "[cyan]running[/cyan]"
+                else:
+                    status_cell = "[dim]queued[/dim]"
+                vr = f"{st['verdict']}/{st['risk']}" if st["verdict"] != "-" else "-"
+                table.add_row(
+                    str(idx),
+                    str(st["target"]),
+                    str(st["manager"]),
+                    str(st["phase"]),
+                    status_cell,
+                    f"{st['elapsed']:.1f}s",
+                    vr,
+                )
+        return table
+
+    def _run_one(spec: Dict[str, str], idx: int) -> Dict[str, Any]:
+        def _cb(msg: str) -> None:
+            with lock:
+                st = states[idx]
+                if st["started_at"] is None:
+                    st["started_at"] = time.time()
+                st["status"] = "running"
+                st["phase"] = msg
+                st["elapsed"] = time.time() - st["started_at"]
+
+        with lock:
+            states[idx]["status"] = "running"
+            states[idx]["phase"] = "starting"
+            states[idx]["started_at"] = time.time()
+        result = _run_with_timeout(
+            spec["package_name"],
+            spec["manager"],
+            timeout_s,
+            spec["package_source"] or None,
+            show_progress=False,
+            external_progress_callback=_cb,
+        )
+        fv = result.get("final_verdict") or {}
+        with lock:
+            st = states[idx]
+            st["elapsed"] = time.time() - (st["started_at"] or time.time())
+            if "timed out" in str(result.get("error", "")).lower():
+                st["status"] = "timeout"
+            elif result.get("error"):
+                st["status"] = "error"
+            else:
+                st["status"] = "done"
+            st["phase"] = "completed"
+            st["verdict"] = str(fv.get("verdict", "-")).upper()
+            st["risk"] = str(fv.get("risk_level", "-")).upper()
+        return result
+
+    results: List[Dict[str, Any]] = [None] * len(specs)  # type: ignore[list-item]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        future_to_idx = {pool.submit(_run_one, spec, idx): idx for idx, spec in enumerate(specs)}
+        with Live(_make_table(), refresh_per_second=10, transient=False) as live:
+            pending = set(future_to_idx.keys())
+            while pending:
+                done, pending = wait(pending, timeout=0.15, return_when=FIRST_COMPLETED)
+                with lock:
+                    now = time.time()
+                    for st in states:
+                        if st["started_at"] is not None and st["status"] in {"running", "queued"}:
+                            st["elapsed"] = now - st["started_at"]
+                for fut in done:
+                    idx = future_to_idx[fut]
+                    results[idx] = fut.result()
+                live.update(_make_table())
+            total = time.time() - started
+            live.update(_make_table())
+    print(_color(f"Batch completed in {total:.1f}s", "90"))
+    return results
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Hazmat-MCP CLI wrapper for package audits")
     parser.add_argument("--package", help="Package name (PyPI/npm)")
@@ -333,6 +457,7 @@ def main() -> None:
     parser.add_argument("--parallel", type=int, default=1, help="Parallel workers for --batch-file mode")
     parser.add_argument("--manager", choices=["pip", "npm"], default="pip", help="Package manager")
     parser.add_argument("--timeout", type=int, default=180, help="Overall agent timeout in seconds")
+    parser.add_argument("--live", action="store_true", help="Enable rich live dashboard for batch mode")
     parser.add_argument("--raw-json", action="store_true", help="Print full JSON result")
     args = parser.parse_args()
 
@@ -343,19 +468,23 @@ def main() -> None:
         if not specs:
             parser.error("Batch file is empty or has no valid targets.")
         workers = max(1, min(args.parallel, 8))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [
-                pool.submit(
-                    _run_with_timeout,
-                    spec["package_name"],
-                    spec["manager"],
-                    args.timeout,
-                    spec["package_source"] or None,
-                    False,
-                )
-                for spec in specs
-            ]
-            results = [f.result() for f in futures]
+        use_live = bool(args.live or (sys.stdout.isatty() and _HAS_RICH and not args.raw_json))
+        if use_live:
+            results = _run_batch_live_dashboard(specs, args.timeout, workers)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [
+                    pool.submit(
+                        _run_with_timeout,
+                        spec["package_name"],
+                        spec["manager"],
+                        args.timeout,
+                        spec["package_source"] or None,
+                        False,
+                    )
+                    for spec in specs
+                ]
+                results = [f.result() for f in futures]
         if args.raw_json:
             print(json.dumps({"mode": "batch", "results": results}, indent=2, sort_keys=True))
         else:

@@ -178,6 +178,7 @@ EOF
 
 python3 hazmat_cli.py --batch-file batch_targets.txt --parallel 4
 python3 hazmat_cli.py --batch-file batch_targets.txt --parallel 4 --raw-json
+python3 hazmat_cli.py --batch-file batch_targets.txt --parallel 4 --live
 ```
 
 ## Step 7: Integration hardening
