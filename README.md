@@ -93,3 +93,46 @@ The server runs over stdio transport.
 
 - First run can be slow because Docker may need to pull base images (`python:3.11-slim` / `node:20-slim`).
 - This is a hackathon-grade baseline, not a production malware sandbox.
+
+## Step 4: LangGraph Agent
+
+`agent.py` runs the orchestration loop:
+1. `spin_up_sandbox`
+2. `execute_install`
+3. `get_telemetry`
+4. analyze verdict
+5. `nuke_sandbox` (always attempted)
+
+Run it:
+
+```bash
+source .venv/bin/activate
+python3 agent.py
+```
+
+Override package/manager:
+
+```bash
+HAZMAT_PACKAGE=requests HAZMAT_MANAGER=pip python3 agent.py
+```
+
+Optional LLM analysis mode:
+- Model-first is enabled by default in this order:
+  1) `GEMINI_API_KEY` (`HAZMAT_GEMINI_MODEL`, default `gemini-2.0-flash`)
+- If no model key is set (or model call fails), agent falls back to deterministic rule-based analysis.
+
+### Timeout runner (recommended for edge-case tests)
+
+Use the helper script to avoid hanging on unresolved package lookups:
+
+```bash
+chmod +x run_agent_timeout.sh
+./run_agent_timeout.sh requests pip 120
+./run_agent_timeout.sh this-package-should-not-exist-xyz123 pip 60
+```
+
+The script sets:
+- `PIP_DEFAULT_TIMEOUT=10`
+- `PIP_RETRIES=0`
+
+and wraps `python3 agent.py` with a hard timeout.
