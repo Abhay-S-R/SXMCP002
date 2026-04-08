@@ -2,6 +2,9 @@ import argparse
 import json
 import os
 import re
+import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any, Dict, List
 
@@ -182,12 +185,60 @@ def _print_human(result: Dict[str, Any]) -> None:
         print(_color(str(result["error"]), "31"))
 
 
-def _run_with_timeout(package_name: str, manager: str, timeout_seconds: int, package_source: str | None = None) -> Dict[str, Any]:
+def _run_with_timeout(
+    package_name: str,
+    manager: str,
+    timeout_seconds: int,
+    package_source: str | None = None,
+    show_progress: bool = True,
+) -> Dict[str, Any]:
+    spinner_frames = ["|", "/", "-", "\\"]
+    progress = {"message": "Starting Hazmat agent"}
+    lock = threading.Lock()
+
+    def _set_progress(msg: str) -> None:
+        with lock:
+            progress["message"] = msg
+
+    def _draw_spinner(frame_idx: int) -> None:
+        if not _supports_color():
+            return
+        with lock:
+            msg = progress["message"]
+        line = f"\r{_color(spinner_frames[frame_idx % len(spinner_frames)], '36')} {msg}..."
+        sys.stdout.write(line)
+        sys.stdout.flush()
+
+    spinner_enabled = show_progress and sys.stdout.isatty()
     with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(run_hazmat_audit, package_name, manager, package_source)
-        try:
-            return future.result(timeout=timeout_seconds)
-        except FuturesTimeoutError:
+        future = executor.submit(run_hazmat_audit, package_name, manager, package_source, _set_progress)
+        start = time.time()
+        frame = 0
+        timed_out = False
+        result: Dict[str, Any] | None = None
+        while True:
+            elapsed = time.time() - start
+            remaining = max(0.0, timeout_seconds - elapsed)
+            if spinner_enabled:
+                _draw_spinner(frame)
+                frame += 1
+            try:
+                result = future.result(timeout=min(0.12, remaining))
+                break
+            except FuturesTimeoutError:
+                if elapsed >= timeout_seconds:
+                    timed_out = True
+                    break
+                continue
+
+        if spinner_enabled:
+            with lock:
+                done_msg = progress["message"] if not timed_out else "Timed out"
+            sys.stdout.write(f"\r{_color('✓', '32') if not timed_out else _color('✗', '31')} {done_msg}{' ' * 40}\n")
+            sys.stdout.flush()
+
+        if timed_out:
+            future.cancel()
             return {
                 "package_name": package_name,
                 "manager": manager,
@@ -200,6 +251,11 @@ def _run_with_timeout(package_name: str, manager: str, timeout_seconds: int, pac
                     "reasoning_mode": "timeout_guard",
                 },
             }
+        return result or {
+            "package_name": package_name,
+            "manager": manager,
+            "error": "Unknown execution failure.",
+        }
 
 
 def main() -> None:
@@ -217,7 +273,13 @@ def main() -> None:
         parser.error("Use only one of --package or --package-source.")
 
     package_name = args.package or "local-artifact"
-    result = _run_with_timeout(package_name, args.manager, args.timeout, args.package_source)
+    result = _run_with_timeout(
+        package_name,
+        args.manager,
+        args.timeout,
+        args.package_source,
+        show_progress=not args.raw_json,
+    )
 
     if args.raw_json:
         print(json.dumps(result, indent=2, sort_keys=True))
