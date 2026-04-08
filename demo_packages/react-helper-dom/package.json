@@ -1,0 +1,16 @@
+{
+  "name": "react-helper-dom",
+  "version": "1.0.0",
+  "description": "Demo package for Hazmat-MCP postinstall detonation tests",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "keywords": [
+    "hazmat-demo",
+    "supply-chain",
+    "postinstall"
+  ],
+  "author": "Hazmat Demo",
+  "license": "UNLICENSED"
+}

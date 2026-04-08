@@ -185,35 +185,31 @@ def _manager_mismatch_precheck(package_name: str, manager: str) -> Dict[str, Any
 def _looks_like_expected_npm_install_noise(telemetry: Dict[str, Any], manager: str) -> bool:
     if (manager or "").strip().lower() != "npm":
         return False
-    alerts = telemetry.get("alerts") or []
-    if not alerts:
-        return False
-
     install = telemetry.get("install") or {}
     if install.get("exit_code") != 0:
         return False
 
     network = telemetry.get("network") or {}
-    tcp_added = network.get("tcp_added") or []
+    tcp_added = (network.get("tcp_added") or []) + (network.get("tcp6_added") or [])
     if not tcp_added:
         return False
-    # npm registry and similar normal installs are usually outbound 443
-    if not all((item or {}).get("remote_port") == 443 for item in tcp_added):
+    unusual_outbound = network.get("unusual_outbound") or []
+    if unusual_outbound:
         return False
 
     fs = telemetry.get("filesystem") or {}
     if not fs.get("changed"):
         return False
-    after_tail = "\n".join(fs.get("after_tail") or [])
-    npm_markers = ["/root/.npm/", "_update-notifier-last-checked", "_logs/"]
-    if not any(marker in after_tail for marker in npm_markers):
+    if not fs.get("has_expected_install_markers"):
+        return False
+    if fs.get("has_credential_markers"):
         return False
 
-    alert_text = " | ".join(alerts).lower()
-    has_only_expected_alert_types = (
-        "outbound connection" in alert_text and "file access/creation detected" in alert_text
-    )
-    return has_only_expected_alert_types
+    classification = telemetry.get("classification") or {}
+    suspicious_indicators = classification.get("suspicious_indicators") or []
+    if suspicious_indicators:
+        return False
+    return True
 
 
 def _apply_post_analysis_guards(
