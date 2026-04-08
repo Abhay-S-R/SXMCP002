@@ -6,6 +6,7 @@ import tarfile
 import threading
 import uuid
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -432,7 +433,7 @@ def get_telemetry(session_id: Optional[str] = None) -> str:
             "added_paths_head": added_paths[:40],
             "has_expected_install_markers": fs_has_expected_markers,
             "has_credential_markers": fs_has_credential_markers,
-                "suspicious_install_artifacts": suspicious_install_artifacts[:20],
+            "suspicious_install_artifacts": suspicious_install_artifacts[:20],
             "before_tail": baseline.fs_snapshot.splitlines()[-40:] if fs_changed else [],
             "after_tail": after.fs_snapshot.splitlines()[-40:] if fs_changed else [],
         },
@@ -447,6 +448,269 @@ def get_telemetry(session_id: Optional[str] = None) -> str:
         },
     }
     return _resp(True, "get_telemetry", telemetry=telemetry)
+
+
+@mcp.tool()
+def audit_many(
+    manager: str,
+    package_sources: List[str],
+    max_concurrency: int = 4,
+    timeout_s: int = 180,
+    base_image: Optional[str] = None,
+) -> str:
+    """
+    Batch-audit multiple local artifacts (e.g. .tgz), each in its own ephemeral container.
+    Designed to support `hazmat_cli.py --package-sources ...` for hackathon demos.
+    """
+    mgr = (manager or "").lower().strip()
+    if mgr not in {"pip", "npm"}:
+        return _resp(False, "audit_many", error="invalid_manager", message="Use 'pip' or 'npm'.")
+    if not package_sources:
+        return _resp(False, "audit_many", error="empty_package_sources", message="Provide at least one artifact path.")
+
+    if base_image is None:
+        base_image = "node:20-slim" if mgr == "npm" else "python:3.11-slim"
+
+    # Resolve paths early for deterministic worker behavior.
+    resolved_sources: List[str] = []
+    for src in package_sources:
+        p = Path(str(src))
+        if not p.is_absolute():
+            p = (Path.cwd() / p).resolve()
+        resolved_sources.append(str(p))
+
+    def _audit_one(source_path: str) -> Dict[str, Any]:
+        session_id = f"batch-{uuid.uuid4()}"
+        container = None
+        try:
+            container = docker_client.containers.run(
+                base_image,
+                command=["sh", "-lc", "tail -f /dev/null"],
+                detach=True,
+                remove=False,
+                network_mode="bridge",
+                mem_limit="512m",
+                security_opt=["no-new-privileges:true"],
+            )
+
+            baseline = _snapshot_baseline(container)
+            staged_path = _stage_file_in_container(container, Path(source_path))
+
+            if mgr == "npm":
+                install_cmd: List[str] = ["npm", "install", "-g", staged_path]
+            else:
+                install_cmd = ["pip", "install", staged_path, "--no-cache-dir"]
+
+            exit_code, output = _exec(container, install_cmd, timeout_s=int(timeout_s))
+            out_text = output.decode("utf-8", errors="replace")
+            if len(out_text) > 2500:
+                out_text = out_text[:2500] + "\n…(truncated)…"
+
+            install_meta = {
+                "package_name": None,
+                "package_source": source_path,
+                "source_mode": "local_tgz",
+                "install_target": staged_path,
+                "staged_container_path": staged_path,
+                "manager": mgr,
+                "exit_code": exit_code,
+                "output_preview": out_text,
+            }
+
+            after = _snapshot_baseline(container)
+
+            # Reuse the same analysis logic as get_telemetry() (inline, hackathon-grade).
+            before_tcp = _parse_proc_net_tcp(baseline.proc_net_tcp)
+            after_tcp = _parse_proc_net_tcp(after.proc_net_tcp)
+            before_tcp6 = _parse_proc_net_tcp(baseline.proc_net_tcp6)
+            after_tcp6 = _parse_proc_net_tcp(after.proc_net_tcp6)
+
+            tcp_added = _diff_added(before_tcp, after_tcp)
+            tcp6_added = _diff_added(before_tcp6, after_tcp6)
+            all_added_tcp = tcp_added + tcp6_added
+            unusual_outbound = [c for c in all_added_tcp if (c or {}).get("remote_port") not in {80, 443}]
+
+            fs_changed = baseline.fs_snapshot != after.fs_snapshot
+            before_paths = set(_extract_snapshot_paths(baseline.fs_snapshot))
+            after_paths = set(_extract_snapshot_paths(after.fs_snapshot))
+            added_paths = sorted(after_paths - before_paths)
+            added_blob = "\n".join(added_paths)
+
+            expected_markers = EXPECTED_NPM_PATH_MARKERS if mgr == "npm" else EXPECTED_PIP_PATH_MARKERS
+            fs_has_credential_markers = _contains_any_marker(added_blob, SUSPICIOUS_CREDENTIAL_PATH_MARKERS)
+            fs_has_expected_markers = _contains_any_marker(added_blob, expected_markers)
+            suspicious_install_artifacts = [
+                p
+                for p in added_paths
+                if ("/tmp/" in p or "/var/tmp/" in p)
+                and any(k in p.lower() for k in SUSPICIOUS_INSTALL_ARTIFACT_KEYWORDS)
+            ]
+
+            alerts: List[str] = []
+            suspicious_indicators: List[str] = []
+            expected_activity: List[str] = []
+
+            network_verdict = "clean"
+            if all_added_tcp:
+                network_verdict = "suspicious"
+                alerts.append("Suspicious Outbound Connection: New outbound TCP connections observed after install phase.")
+                suspicious_indicators.append(
+                    "Outbound TCP destinations observed: "
+                    + ", ".join(str((c or {}).get("remote_port")) for c in all_added_tcp[:8])
+                )
+                if unusual_outbound:
+                    suspicious_indicators.append(
+                        "Outbound TCP includes uncommon destination ports: "
+                        + ", ".join(str((c or {}).get("remote_port")) for c in unusual_outbound[:5])
+                    )
+                else:
+                    expected_activity.append(
+                        "Outbound traffic uses web ports (80/443); verify destination context because HTTPS can still carry exfiltration."
+                    )
+
+            if fs_changed:
+                if fs_has_credential_markers:
+                    alerts.append("Credential Path Access Detected: New file activity touched likely credential locations.")
+                    suspicious_indicators.append("Filesystem diff includes credential-like paths (AWS/SSH/kube/npmrc/etc).")
+                elif suspicious_install_artifacts:
+                    alerts.append("Install Script Artifact Detected: New marker/beacon-like files were created in temp directories.")
+                    suspicious_indicators.append(
+                        "Install created suspicious temp artifacts: " + ", ".join(suspicious_install_artifacts[:5])
+                    )
+                elif fs_has_expected_markers:
+                    expected_activity.append("Filesystem activity aligns with expected package cache/install paths.")
+                else:
+                    alerts.append("File Access/Creation Detected: Package modified files outside common install/cache locations.")
+
+            if exit_code not in (None, 0):
+                alerts.append(f"Install command returned non-zero exit code ({exit_code}).")
+
+            if all_added_tcp and fs_has_credential_markers:
+                risk_level = "critical"
+            elif unusual_outbound and fs_changed:
+                risk_level = "critical"
+            elif suspicious_install_artifacts and all_added_tcp:
+                risk_level = "high"
+            elif unusual_outbound:
+                risk_level = "high"
+            elif all_added_tcp:
+                risk_level = "medium"
+            elif fs_has_credential_markers:
+                risk_level = "high"
+            elif suspicious_install_artifacts:
+                risk_level = "medium"
+            elif fs_changed and not fs_has_expected_markers:
+                risk_level = "medium"
+            else:
+                risk_level = "low"
+
+            summary = "No suspicious activity detected." if not alerts else f"{len(alerts)} suspicious activities detected."
+
+            telemetry = {
+                "session_id": session_id,
+                "install": install_meta,
+                "network": {
+                    "verdict": network_verdict,
+                    "tcp_added": tcp_added,
+                    "tcp6_added": tcp6_added,
+                    "unusual_outbound": unusual_outbound,
+                },
+                "filesystem": {
+                    "changed": fs_changed,
+                    "added_paths_head": added_paths[:40],
+                    "has_expected_install_markers": fs_has_expected_markers,
+                    "has_credential_markers": fs_has_credential_markers,
+                    "suspicious_install_artifacts": suspicious_install_artifacts[:20],
+                },
+                "processes": {"current_head": after.proc_snapshot.splitlines()[:60]},
+                "risk_level": risk_level,
+                "alerts": alerts,
+                "summary": summary,
+                "classification": {
+                    "expected_activity": expected_activity[:5],
+                    "suspicious_indicators": suspicious_indicators[:8],
+                },
+            }
+
+            if risk_level == "critical":
+                verdict = "malicious"
+            elif risk_level in {"high", "medium"}:
+                verdict = "suspicious"
+            elif risk_level == "low" and exit_code == 0:
+                verdict = "safe"
+            else:
+                verdict = "suspicious"
+
+            return {
+                "ok": True,
+                "session_id": session_id,
+                "manager": mgr,
+                "package_source": source_path,
+                "install": install_meta,
+                "telemetry": telemetry,
+                "final_verdict": {
+                    "verdict": verdict,
+                    "risk_level": risk_level,
+                    "summary": summary,
+                    "evidence": alerts[:5],
+                    "reasoning_mode": "batch_rule_based",
+                },
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "session_id": session_id,
+                "manager": mgr,
+                "package_source": source_path,
+                "error": f"{exc.__class__.__name__}: {str(exc)[:200]}",
+                "final_verdict": {
+                    "verdict": "suspicious",
+                    "risk_level": "medium",
+                    "summary": "Audit failed; treat as suspicious.",
+                    "evidence": [f"Batch audit error: {exc.__class__.__name__}"],
+                    "reasoning_mode": "batch_error_path",
+                },
+            }
+        finally:
+            if container is not None:
+                try:
+                    container.kill()
+                except Exception:
+                    pass
+                try:
+                    container.remove()
+                except Exception:
+                    pass
+
+    max_workers = max(1, min(int(max_concurrency or 1), 16))
+    results: List[Dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_audit_one, p): p for p in resolved_sources}
+        for fut in as_completed(futures):
+            results.append(fut.result())
+
+    severity = {"critical": 4, "high": 3, "medium": 2, "low": 1, "unknown": 0}
+    results.sort(
+        key=lambda r: severity.get(str((r.get("final_verdict") or {}).get("risk_level", "unknown")).lower(), 0),
+        reverse=True,
+    )
+
+    risk_counts = {"low": 0, "medium": 0, "high": 0, "critical": 0}
+    ok_count = 0
+    for r in results:
+        if r.get("ok"):
+            ok_count += 1
+        rl = str((r.get("final_verdict") or {}).get("risk_level", "unknown")).lower()
+        if rl in risk_counts:
+            risk_counts[rl] += 1
+
+    summary = {
+        "count": len(results),
+        "ok_count": ok_count,
+        "error_count": len(results) - ok_count,
+        "risk_counts": risk_counts,
+    }
+    return _resp(True, "audit_many", manager=mgr, base_image=base_image, summary=summary, results=results)
 
 @mcp.tool()
 def nuke_sandbox(session_id: Optional[str] = None) -> str:

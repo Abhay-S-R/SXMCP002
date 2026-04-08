@@ -1,0 +1,11 @@
+{
+  "name": "hazmat-demo-e",
+  "version": "1.0.0",
+  "description": "Hazmat demo E (high/critical): temp artifact + outbound on unusual port",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "author": "Hazmat Demo",
+  "license": "UNLICENSED"
+}

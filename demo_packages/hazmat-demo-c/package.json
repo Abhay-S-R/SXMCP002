@@ -1,0 +1,11 @@
+{
+  "name": "hazmat-demo-c",
+  "version": "1.0.2",
+  "description": "Hazmat demo C (medium): postinstall does outbound HTTPS beacon",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "author": "Hazmat Demo",
+  "license": "UNLICENSED"
+}

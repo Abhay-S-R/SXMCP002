@@ -1,0 +1,11 @@
+{
+  "name": "hazmat-demo-d",
+  "version": "1.0.0",
+  "description": "Hazmat demo D (critical): touches credential-like paths + outbound beacon",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "author": "Hazmat Demo",
+  "license": "UNLICENSED"
+}

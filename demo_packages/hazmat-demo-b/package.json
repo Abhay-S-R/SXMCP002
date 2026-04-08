@@ -1,0 +1,11 @@
+{
+  "name": "hazmat-demo-b",
+  "version": "1.0.2",
+  "description": "Hazmat demo B (medium): postinstall drops marker in /tmp",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "author": "Hazmat Demo",
+  "license": "UNLICENSED"
+}

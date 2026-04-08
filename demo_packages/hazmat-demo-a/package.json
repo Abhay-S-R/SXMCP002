@@ -1,0 +1,9 @@
+{
+  "name": "hazmat-demo-a",
+  "version": "1.0.2",
+  "description": "Hazmat demo A (benign): no postinstall behavior",
+  "main": "index.js",
+  "scripts": {},
+  "author": "Hazmat Demo",
+  "license": "UNLICENSED"
+}
