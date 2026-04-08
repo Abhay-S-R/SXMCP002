@@ -11,7 +11,9 @@ from typing import Any, Dict, List
 from agent import run_hazmat_audit
 
 try:
+    from rich.console import Console
     from rich.live import Live
+    from rich.panel import Panel
     from rich.table import Table
 
     _HAS_RICH = True
@@ -197,6 +199,101 @@ def _print_human(result: Dict[str, Any]) -> None:
     if result.get("error"):
         _section("Agent Error")
         print(_color(str(result["error"]), "31"))
+
+
+def _print_human_rich(result: Dict[str, Any]) -> None:
+    if not _HAS_RICH:
+        _print_human(result)
+        return
+    console = Console()
+    final_verdict = result.get("final_verdict") or {}
+    telemetry = ((result.get("telemetry_response") or {}).get("telemetry") or {})
+    classification = telemetry.get("classification") or {}
+    install = telemetry.get("install") or {}
+    network = telemetry.get("network") or {}
+    fs = telemetry.get("filesystem") or {}
+    proc = telemetry.get("processes") or {}
+    llm_debug = result.get("llm_debug") or {}
+    precheck = result.get("precheck") or {}
+    verdict = str(final_verdict.get("verdict", "unknown")).upper()
+    risk = str(final_verdict.get("risk_level", "unknown")).upper()
+    reasoning_mode = str(final_verdict.get("reasoning_mode", "unknown"))
+    summary = str(final_verdict.get("summary", "No summary available."))
+    evidence = _as_list(final_verdict.get("evidence"))
+    alerts = _as_list(telemetry.get("alerts"))
+
+    verdict_style = "green" if verdict == "SAFE" else ("yellow" if verdict == "SUSPICIOUS" else "red")
+    risk_style = "green" if risk == "LOW" else ("yellow" if risk == "MEDIUM" else "red")
+    console.rule("[bold cyan]Hazmat-MCP Dynamic Supply-Chain Audit[/bold cyan]")
+    package_display = result.get("package_source") or result.get("package_name")
+    elapsed = install.get("elapsed_s")
+    elapsed_display = f"{elapsed}s" if isinstance(elapsed, (int, float)) else "n/a"
+
+    context = Table(show_header=False, box=None, pad_edge=False)
+    context.add_column("k", style="bold cyan", width=12)
+    context.add_column("v")
+    context.add_row("Package", str(package_display))
+    context.add_row("Manager", str(result.get("manager")))
+    context.add_row("Session", str(result.get("session_id")))
+    context.add_row("Install", f"exit_code={install.get('exit_code')} elapsed={elapsed_display}")
+    console.print(Panel(context, title="Run Context", border_style="cyan"))
+
+    verdict_tbl = Table(show_header=False, box=None, pad_edge=False)
+    verdict_tbl.add_column("k", style="bold cyan", width=12)
+    verdict_tbl.add_column("v")
+    verdict_tbl.add_row("Verdict", f"[{verdict_style}]{verdict}[/{verdict_style}]")
+    verdict_tbl.add_row("Risk", f"[{risk_style}]{risk}[/{risk_style}]")
+    verdict_tbl.add_row("Mode", reasoning_mode)
+    verdict_tbl.add_row("Score", str(classification.get("risk_score", "n/a")))
+    console.print(Panel(verdict_tbl, title="Security Verdict", border_style="magenta"))
+
+    console.print(Panel(summary, title="Summary", border_style="blue"))
+    if precheck.get("suspected"):
+        console.print(Panel(f"Possible manager mismatch detected.\nReason: {precheck.get('reason')}", title="Precheck", border_style="yellow"))
+
+    if evidence:
+        ev_table = Table(show_header=True, header_style="bold")
+        ev_table.add_column("Evidence")
+        for item in evidence[:8]:
+            ev_table.add_row(_truncate(item, 150))
+        console.print(Panel(ev_table, title="Evidence", border_style="green"))
+
+    snap = Table(show_header=False, box=None, pad_edge=False)
+    snap.add_column("k", style="bold cyan", width=22)
+    snap.add_column("v")
+    snap.add_row("Outbound TCP added", str(len(_as_list(network.get("tcp_added"))) + len(_as_list(network.get("tcp6_added")))))
+    snap.add_row("Filesystem changed", str(bool(fs.get("changed"))))
+    snap.add_row("New processes", str(len(_as_list(proc.get("added")))))
+    snap.add_row("Indicators", str(len(_as_list(classification.get("suspicious_indicators")))))
+    console.print(Panel(snap, title="Telemetry Snapshot", border_style="blue"))
+
+    if (
+        verdict == "SAFE"
+        and risk == "LOW"
+        and str(result.get("manager", "")).lower() == "npm"
+        and "expected npm install behavior" in summary.lower()
+    ):
+        alerts = [a for a in alerts if "suspicious outbound connection" not in a.lower()]
+    if alerts:
+        al_table = Table(show_header=True, header_style="bold")
+        al_table.add_column("Top Telemetry Alerts")
+        for item in alerts[:8]:
+            al_table.add_row(_truncate(item, 150))
+        console.print(Panel(al_table, border_style="red"))
+
+    if llm_debug:
+        dbg = Table(show_header=False, box=None, pad_edge=False)
+        dbg.add_column("k", style="bold cyan", width=12)
+        dbg.add_column("v")
+        dbg.add_row("attempted", str(llm_debug.get("attempted")))
+        dbg.add_row("path", str(llm_debug.get("path")))
+        dbg.add_row("model", str(llm_debug.get("used_model")))
+        if llm_debug.get("error_type"):
+            dbg.add_row("error", f"{llm_debug.get('error_type')}: {llm_debug.get('error_message')}")
+        console.print(Panel(dbg, title="LLM Debug", border_style="yellow"))
+
+    if result.get("error"):
+        console.print(Panel(str(result.get("error")), title="Agent Error", border_style="red"))
 
 
 def _run_with_timeout(
@@ -507,7 +604,10 @@ def main() -> None:
         if args.raw_json:
             print(json.dumps(result, indent=2, sort_keys=True))
         else:
-            _print_human(result)
+            if _HAS_RICH and sys.stdout.isatty():
+                _print_human_rich(result)
+            else:
+                _print_human(result)
 
 
 if __name__ == "__main__":
