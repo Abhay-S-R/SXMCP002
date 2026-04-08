@@ -1,6 +1,7 @@
 import json
 import re
 import shlex
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -12,7 +13,13 @@ mcp = FastMCP("Hazmat-Security-Scanner")
 docker_client = docker.from_env()
 
 # In-memory store for active sandbox state (hackathon-grade single-session server)
-active_sandbox: Dict[str, Any] = {"id": None, "manager": None, "baseline": None}
+active_sandbox: Dict[str, Any] = {
+    "id": None,
+    "manager": None,
+    "session_id": None,
+    "baseline": None,
+    "install": None,
+}
 
 
 @dataclass(frozen=True)
@@ -131,16 +138,33 @@ def _diff_added(before: List[Dict[str, Any]], after: List[Dict[str, Any]]) -> Li
     aset = {json.dumps(x, sort_keys=True) for x in after}
     return [json.loads(x) for x in sorted(aset - bset)]
 
+
+def _resp(ok: bool, **payload: Any) -> str:
+    body: Dict[str, Any] = {"ok": ok, **payload}
+    return json.dumps(body, indent=2, sort_keys=True)
+
 @mcp.tool()
-def spin_up_sandbox(manager: str = "pip", base_image: Optional[str] = None) -> str:
+def spin_up_sandbox(
+    manager: str = "pip",
+    session_id: Optional[str] = None,
+    base_image: Optional[str] = None,
+) -> str:
     """Spin up an ephemeral Docker container for safe malware analysis."""
     try:
         manager = (manager or "pip").lower().strip()
         if manager not in {"pip", "npm"}:
-            return "❌ Invalid manager. Use 'pip' or 'npm'."
+            return _resp(ok=False, error="invalid_manager", message="Use 'pip' or 'npm'.")
 
         if base_image is None:
             base_image = "node:20-slim" if manager == "npm" else "python:3.11-slim"
+
+        if active_sandbox.get("id"):
+            return _resp(
+                ok=False,
+                error="sandbox_already_active",
+                session_id=active_sandbox.get("session_id"),
+                container_id=active_sandbox.get("id"),
+            )
 
         container = docker_client.containers.run(
             base_image,
@@ -151,28 +175,38 @@ def spin_up_sandbox(manager: str = "pip", base_image: Optional[str] = None) -> s
             mem_limit="512m", # Limit resources
             security_opt=["no-new-privileges:true"] # Basic hardening
         )
+        resolved_session_id = (session_id or str(uuid.uuid4())).strip()
         active_sandbox["id"] = container.id
         active_sandbox["manager"] = manager
+        active_sandbox["session_id"] = resolved_session_id
         active_sandbox["baseline"] = None
-        return f"✅ Sandbox ready! Manager: {manager}. Image: {base_image}. Container ID: {container.id[:12]}"
+        active_sandbox["install"] = None
+        return _resp(
+            ok=True,
+            action="spin_up_sandbox",
+            session_id=resolved_session_id,
+            manager=manager,
+            base_image=base_image,
+            container_id=container.id,
+        )
     except Exception as e:
-        return f"❌ Failed to create sandbox: {str(e)}"
+        return _resp(ok=False, error="spin_up_failed", message=str(e))
 
 @mcp.tool()
 def execute_install(package_name: str, manager: Optional[str] = None) -> str:
     """Install a package inside the sandbox and capture the terminal output."""
     if not active_sandbox.get("id"):
-        return "⚠️ No active sandbox. Call spin_up_sandbox first."
+        return _resp(ok=False, error="no_active_sandbox", message="Call spin_up_sandbox first.")
 
     container = _get_container()
     
     pkg = (package_name or "").strip()
     if not pkg:
-        return "❌ package_name is required."
+        return _resp(ok=False, error="invalid_package_name", message="package_name is required.")
 
     chosen_manager = (manager or active_sandbox.get("manager") or "pip").lower().strip()
     if chosen_manager not in {"pip", "npm"}:
-        return "❌ Invalid manager. Use 'pip' or 'npm'."
+        return _resp(ok=False, error="invalid_manager", message="Use 'pip' or 'npm'.")
 
     # Determine the install command (argv list => avoids shell injection)
     if chosen_manager == "npm":
@@ -189,9 +223,20 @@ def execute_install(package_name: str, manager: Optional[str] = None) -> str:
         out_text = output.decode("utf-8", errors="replace")
         if len(out_text) > 4000:
             out_text = out_text[:4000] + "\n…(truncated)…"
-        return f"📦 Install finished (exit code: {exit_code}).\nOutput:\n{out_text}"
+        active_sandbox["install"] = {
+            "package_name": pkg,
+            "manager": chosen_manager,
+            "exit_code": exit_code,
+            "output_preview": out_text,
+        }
+        return _resp(
+            ok=True,
+            action="execute_install",
+            session_id=active_sandbox.get("session_id"),
+            install=active_sandbox["install"],
+        )
     except Exception as e:
-        return f"❌ Installation failed: {str(e)}"
+        return _resp(ok=False, error="install_failed", message=str(e), session_id=active_sandbox.get("session_id"))
 
 @mcp.tool()
 def get_telemetry() -> str:
@@ -200,7 +245,7 @@ def get_telemetry() -> str:
     This is the most critical function for detecting malware.
     """
     if not active_sandbox.get("id"):
-        return "⚠️ No active sandbox."
+        return _resp(ok=False, error="no_active_sandbox", message="Call spin_up_sandbox first.")
 
     container = _get_container()
     baseline: Optional[Baseline] = active_sandbox.get("baseline")
@@ -209,7 +254,14 @@ def get_telemetry() -> str:
         active_sandbox["baseline"] = baseline
 
     after = _snapshot_baseline(container)
-    report: Dict[str, Any] = {"network": {}, "filesystem": {}, "processes": {}, "notes": []}
+    report: Dict[str, Any] = {
+        "session_id": active_sandbox.get("session_id"),
+        "install": active_sandbox.get("install"),
+        "network": {},
+        "filesystem": {},
+        "processes": {},
+        "notes": [],
+    }
     
     # 1) Network diff via /proc/net/tcp*
     before_tcp = _parse_proc_net_tcp(baseline.proc_net_tcp)
@@ -235,21 +287,31 @@ def get_telemetry() -> str:
     
     # 3) Process snapshot: provide first lines only
     report["processes"]["current_head"] = after.proc_snapshot.splitlines()[:60]
-    return json.dumps(report, indent=2, sort_keys=True)
+    return _resp(ok=True, action="get_telemetry", telemetry=report)
 
 @mcp.tool()
-def nuke_sandbox() -> str:
+def nuke_sandbox(session_id: Optional[str] = None) -> str:
     """Kill and remove the Docker container, cleaning up all evidence."""
     if not active_sandbox.get("id"):
-        return "No sandbox to nuke."
+        return _resp(ok=True, action="nuke_sandbox", message="No active sandbox.")
+    if session_id and session_id != active_sandbox.get("session_id"):
+        return _resp(
+            ok=False,
+            error="session_mismatch",
+            expected_session_id=active_sandbox.get("session_id"),
+            provided_session_id=session_id,
+        )
     
     container = _get_container()
     container.kill()
     container.remove()
+    old_session_id = active_sandbox.get("session_id")
     active_sandbox["id"] = None
     active_sandbox["manager"] = None
+    active_sandbox["session_id"] = None
     active_sandbox["baseline"] = None
-    return "💥 Sandbox destroyed. All evidence has been eliminated."
+    active_sandbox["install"] = None
+    return _resp(ok=True, action="nuke_sandbox", session_id=old_session_id)
 
 if __name__ == "__main__":
     # Run the server via standard input/output for Claude Desktop or other MCP clients
