@@ -3,6 +3,7 @@ import re
 import shlex
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import docker
@@ -19,7 +20,62 @@ active_sandbox: Dict[str, Any] = {
     "session_id": None,
     "baseline": None,
     "install": None,
+    "package_mount": None,
 }
+
+
+def _normalize_host_path(path_str: str) -> str:
+    return str(Path(path_str).expanduser().resolve())
+
+
+def _get_package_mount(package_path: str) -> Tuple[Dict[str, Any], Dict[str, str]]:
+    host_path = Path(package_path).expanduser().resolve()
+    if not host_path.exists():
+        raise FileNotFoundError(f"Package path does not exist: {package_path}")
+
+    if host_path.is_dir():
+        mount_src = str(host_path)
+        mount_dest = f"/workspace/{host_path.name}"
+        container_path = mount_dest
+    else:
+        mount_src = str(host_path.parent)
+        mount_dest = f"/workspace/{host_path.parent.name}"
+        container_path = str(Path(mount_dest) / host_path.name)
+
+    volumes = {mount_src: {"bind": mount_dest, "mode": "ro"}}
+    return volumes, {
+        "host_path": str(host_path),
+        "container_path": container_path,
+        "mount_dest": mount_dest,
+    }
+
+
+def _resolve_package_name(package_name: str) -> str:
+    if not package_name:
+        return package_name
+
+    package_mount = active_sandbox.get("package_mount")
+    if not package_mount:
+        return package_name
+
+    try:
+        host_candidate = Path(package_name).expanduser().resolve()
+    except Exception:
+        host_candidate = None
+
+    if host_candidate and host_candidate == Path(package_mount["host_path"]):
+        return package_mount["container_path"]
+
+    if Path(package_name).name == Path(package_mount["host_path"]).name:
+        return package_mount["container_path"]
+
+    # If package_name is a path relative to host workspace, convert to container path
+    if package_name.startswith("./") or package_name.startswith("../"):
+        candidate = Path(package_name).expanduser().resolve()
+        if candidate == Path(package_mount["host_path"]):
+            return package_mount["container_path"]
+
+    return package_name
 
 
 @dataclass(frozen=True)
@@ -147,6 +203,7 @@ def _resp(ok: bool, **payload: Any) -> str:
 def spin_up_sandbox(
     manager: str = "pip",
     session_id: Optional[str] = None,
+    package_path: Optional[str] = None,
     base_image: Optional[str] = None,
 ) -> str:
     """Spin up an ephemeral Docker container for safe malware analysis."""
@@ -166,14 +223,25 @@ def spin_up_sandbox(
                 container_id=active_sandbox.get("id"),
             )
 
+        # Share evidence directory between host and container so marker files are visible
+        volumes = {"/tmp/hazmat": {"bind": "/tmp/hazmat", "mode": "rw"}}
+        package_mount = None
+        if package_path:
+            package_volumes, package_mount = _get_package_mount(package_path)
+            volumes.update(package_volumes)
+
         container = docker_client.containers.run(
             base_image,
-            command=["sh", "-lc", "tail -f /dev/null"],  # Keep the container alive
+            command=["sh", "-lc", "tail -f /dev/null"],
             detach=True,
-            remove=False, # We will remove it manually
-            network_mode="bridge", # Give it a network stack we can monitor
-            mem_limit="512m", # Limit resources
-            security_opt=["no-new-privileges:true"] # Basic hardening
+            remove=False,
+            network_mode="bridge",
+            mem_limit="512m",
+            security_opt=["no-new-privileges:true"],
+            volumes=volumes,
+            environment={
+                "HAZMAT_HOST_API": "host.docker.internal",
+            },
         )
         resolved_session_id = (session_id or str(uuid.uuid4())).strip()
         active_sandbox["id"] = container.id
@@ -181,14 +249,18 @@ def spin_up_sandbox(
         active_sandbox["session_id"] = resolved_session_id
         active_sandbox["baseline"] = None
         active_sandbox["install"] = None
-        return _resp(
-            ok=True,
-            action="spin_up_sandbox",
-            session_id=resolved_session_id,
-            manager=manager,
-            base_image=base_image,
-            container_id=container.id,
-        )
+        active_sandbox["package_mount"] = package_mount
+        response: Dict[str, Any] = {
+            "ok": True,
+            "action": "spin_up_sandbox",
+            "session_id": resolved_session_id,
+            "manager": manager,
+            "base_image": base_image,
+            "container_id": container.id,
+        }
+        if package_mount:
+            response["package_mount"] = package_mount
+        return _resp(**response)
     except Exception as e:
         return _resp(ok=False, error="spin_up_failed", message=str(e))
 
@@ -209,10 +281,11 @@ def execute_install(package_name: str, manager: Optional[str] = None) -> str:
         return _resp(ok=False, error="invalid_manager", message="Use 'pip' or 'npm'.")
 
     # Determine the install command (argv list => avoids shell injection)
+    resolved_package = _resolve_package_name(pkg)
     if chosen_manager == "npm":
-        install_cmd: List[str] = ["npm", "install", "-g", pkg]
+        install_cmd: List[str] = ["npm", "install", "-g", resolved_package]
     else:
-        install_cmd = ["pip", "install", pkg, "--no-cache-dir"]
+        install_cmd = ["pip", "install", resolved_package, "--no-cache-dir"]
 
     try:
         # Capture baseline BEFORE install so telemetry can be a diff.
