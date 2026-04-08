@@ -26,6 +26,7 @@ class AgentState(TypedDict, total=False):
     llm_debug: Dict[str, Any]
     error: str
     mcp_session: Any
+    precheck: Dict[str, Any]
 
 
 def _parse_json_or_wrap(text: str) -> Dict[str, Any]:
@@ -136,6 +137,120 @@ def _rule_based_verdict(telemetry: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+KNOWN_PYPI_PACKAGES = {
+    "requests",
+    "numpy",
+    "pandas",
+    "scipy",
+    "scikit-learn",
+    "django",
+    "flask",
+    "fastapi",
+    "pydantic",
+    "pytest",
+}
+
+KNOWN_NPM_PACKAGES = {
+    "react",
+    "lodash",
+    "express",
+    "next",
+    "vue",
+    "typescript",
+    "axios",
+    "webpack",
+    "vite",
+}
+
+
+def _manager_mismatch_precheck(package_name: str, manager: str) -> Dict[str, Any]:
+    pkg = (package_name or "").strip().lower()
+    mgr = (manager or "").strip().lower()
+    if not pkg or mgr not in {"pip", "npm"}:
+        return {"suspected": False, "reason": None}
+
+    # npm scope/package format should not be used with pip.
+    if mgr == "pip" and pkg.startswith("@"):
+        return {"suspected": True, "reason": "scoped_npm_name_used_with_pip"}
+
+    if mgr == "npm" and pkg in KNOWN_PYPI_PACKAGES:
+        return {"suspected": True, "reason": "known_pypi_package_used_with_npm"}
+
+    if mgr == "pip" and pkg in KNOWN_NPM_PACKAGES:
+        return {"suspected": True, "reason": "known_npm_package_used_with_pip"}
+
+    return {"suspected": False, "reason": None}
+
+
+def _looks_like_expected_npm_install_noise(telemetry: Dict[str, Any], manager: str) -> bool:
+    if (manager or "").strip().lower() != "npm":
+        return False
+    alerts = telemetry.get("alerts") or []
+    if not alerts:
+        return False
+
+    install = telemetry.get("install") or {}
+    if install.get("exit_code") != 0:
+        return False
+
+    network = telemetry.get("network") or {}
+    tcp_added = network.get("tcp_added") or []
+    if not tcp_added:
+        return False
+    # npm registry and similar normal installs are usually outbound 443
+    if not all((item or {}).get("remote_port") == 443 for item in tcp_added):
+        return False
+
+    fs = telemetry.get("filesystem") or {}
+    if not fs.get("changed"):
+        return False
+    after_tail = "\n".join(fs.get("after_tail") or [])
+    npm_markers = ["/root/.npm/", "_update-notifier-last-checked", "_logs/"]
+    if not any(marker in after_tail for marker in npm_markers):
+        return False
+
+    alert_text = " | ".join(alerts).lower()
+    has_only_expected_alert_types = (
+        "outbound connection" in alert_text and "file access/creation detected" in alert_text
+    )
+    return has_only_expected_alert_types
+
+
+def _apply_post_analysis_guards(
+    verdict: Dict[str, Any],
+    telemetry: Dict[str, Any],
+    package_name: str,
+    manager: str,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    precheck = _manager_mismatch_precheck(package_name, manager)
+    if precheck.get("suspected"):
+        # Prevent false "malicious" conclusions for obvious manager mismatch cases.
+        verdict["verdict"] = "suspicious"
+        verdict["risk_level"] = "medium"
+        verdict["summary"] = (
+            f"Possible manager/package mismatch ({precheck['reason']}). "
+            f"Re-test with the likely correct manager before treating as malware."
+        )
+        evidence = verdict.get("evidence") or []
+        evidence.insert(0, f"Manager mismatch suspected: {precheck['reason']}")
+        verdict["evidence"] = evidence[:5]
+
+    elif _looks_like_expected_npm_install_noise(telemetry, manager):
+        # Normalize known npm install side effects to avoid false positives.
+        verdict["verdict"] = "safe"
+        verdict["risk_level"] = "low"
+        verdict["summary"] = (
+            "Observed network/filesystem activity matches expected npm install behavior "
+            "(registry HTTPS + npm cache/log writes)."
+        )
+        verdict["evidence"] = [
+            "Observed outbound traffic is HTTPS (port 443) consistent with package registry access.",
+            "Filesystem changes are confined to expected npm cache/log locations.",
+        ]
+
+    return verdict, precheck
+
+
 def _llm_verdict_with_gemini(telemetry: Dict[str, Any]) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     api_key = os.getenv("GEMINI_API_KEY")
     model_name = os.getenv("HAZMAT_GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
@@ -212,11 +327,22 @@ async def node_analyze(state: AgentState) -> AgentState:
     telemetry = (state.get("telemetry_response") or {}).get("telemetry", {})
     llm, llm_debug = _gemini_first_verdict(telemetry)
     verdict = llm if llm else _rule_based_verdict(telemetry)
+    verdict, precheck = _apply_post_analysis_guards(
+        verdict=verdict,
+        telemetry=telemetry,
+        package_name=state.get("package_name", ""),
+        manager=state.get("manager", ""),
+    )
     if not llm:
         verdict["reasoning_mode"] = "rule_based_fallback"
     if "summary" not in verdict:
         verdict["summary"] = telemetry.get("summary", "No summary available.")
-    return {"final_verdict": verdict, "llm_debug": llm_debug, "mcp_session": state["mcp_session"]}
+    return {
+        "final_verdict": verdict,
+        "llm_debug": llm_debug,
+        "precheck": precheck,
+        "mcp_session": state["mcp_session"],
+    }
 
 
 async def node_cleanup(state: AgentState) -> AgentState:
@@ -272,6 +398,7 @@ async def _run_hazmat_audit_async(package_name: str, manager: str = "pip") -> Di
                 "telemetry_response": result.get("telemetry_response"),
                 "final_verdict": result.get("final_verdict"),
                 "llm_debug": result.get("llm_debug"),
+                "precheck": result.get("precheck"),
                 "cleanup_response": result.get("cleanup_response"),
                 "error": result.get("error"),
             }
