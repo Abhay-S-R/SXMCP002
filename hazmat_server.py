@@ -1,5 +1,6 @@
 import io
 import json
+import logging
 import os
 import tarfile
 import uuid
@@ -21,6 +22,12 @@ from sandbox_core import (
 
 # Initialize the MCP Server
 mcp = FastMCP("Hazmat-Security-Scanner")
+
+# Keep stdio output clean for TUI clients.
+# FastMCP transport emits request-level INFO logs (CallToolRequest/ListToolsRequest);
+# raise noisy MCP loggers to WARNING so only actionable issues surface.
+for _logger_name in ("mcp", "mcp.server", "mcp.server.lowlevel"):
+    logging.getLogger(_logger_name).setLevel(logging.WARNING)
 
 EXPECTED_NPM_PATH_MARKERS = (
     "/root/.npm/",

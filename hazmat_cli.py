@@ -193,19 +193,40 @@ def _run_with_timeout(
     show_progress: bool = True,
 ) -> Dict[str, Any]:
     spinner_frames = ["|", "/", "-", "\\"]
-    progress = {"message": "Starting Hazmat agent"}
+    phase_order = [
+        "Creating Docker sandbox",
+        "Installing package in sandbox",
+        "Collecting runtime telemetry",
+        "Feeding telemetry to analyzer",
+        "Destroying sandbox",
+    ]
+    phase_index = {name: idx + 1 for idx, name in enumerate(phase_order)}
+    progress = {"message": "Starting Hazmat agent", "phase_started_at": time.time(), "phase_num": 0}
     lock = threading.Lock()
 
     def _set_progress(msg: str) -> None:
         with lock:
+            current = progress.get("message")
+            if current != msg:
+                progress["phase_started_at"] = time.time()
             progress["message"] = msg
+            progress["phase_num"] = phase_index.get(msg, 0)
 
-    def _draw_spinner(frame_idx: int) -> None:
+    def _draw_spinner(frame_idx: int, run_started_at: float) -> None:
         if not _supports_color():
             return
         with lock:
             msg = progress["message"]
-        line = f"\r{_color(spinner_frames[frame_idx % len(spinner_frames)], '36')} {msg}..."
+            phase_started_at = progress["phase_started_at"]
+            phase_num = progress["phase_num"]
+        phase_elapsed = time.time() - phase_started_at
+        total_elapsed = time.time() - run_started_at
+        phase_prefix = f"[{phase_num}/{len(phase_order)}] " if phase_num else ""
+        line = (
+            f"\r{_color(spinner_frames[frame_idx % len(spinner_frames)], '36')} "
+            f"{phase_prefix}{msg}... "
+            f"{_color(f'(phase {phase_elapsed:0.1f}s | total {total_elapsed:0.1f}s)', '90')}"
+        )
         sys.stdout.write(line)
         sys.stdout.flush()
 
@@ -220,7 +241,7 @@ def _run_with_timeout(
             elapsed = time.time() - start
             remaining = max(0.0, timeout_seconds - elapsed)
             if spinner_enabled:
-                _draw_spinner(frame)
+                _draw_spinner(frame, start)
                 frame += 1
             try:
                 result = future.result(timeout=min(0.12, remaining))
@@ -234,7 +255,16 @@ def _run_with_timeout(
         if spinner_enabled:
             with lock:
                 done_msg = progress["message"] if not timed_out else "Timed out"
-            sys.stdout.write(f"\r{_color('✓', '32') if not timed_out else _color('✗', '31')} {done_msg}{' ' * 40}\n")
+                phase_num = progress["phase_num"]
+                phase_started_at = progress["phase_started_at"]
+            phase_elapsed = time.time() - phase_started_at
+            total_elapsed = time.time() - start
+            phase_prefix = f"[{phase_num}/{len(phase_order)}] " if phase_num else ""
+            sys.stdout.write(
+                f"\r{_color('✓', '32') if not timed_out else _color('✗', '31')} "
+                f"{phase_prefix}{done_msg} "
+                f"{_color(f'(phase {phase_elapsed:0.1f}s | total {total_elapsed:0.1f}s)', '90')}{' ' * 12}\n"
+            )
             sys.stdout.flush()
 
         if timed_out:
