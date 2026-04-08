@@ -1,0 +1,222 @@
+{
+  "cleanup_response": {
+    "action": "nuke_sandbox",
+    "message": "Sandbox destroyed. All evidence has been eliminated.",
+    "ok": true,
+    "session_id": "hazmat-d3e33292-d7e2-41ca-b378-d3e0fe0b939b",
+    "status": "ok"
+  },
+  "error": null,
+  "final_verdict": {
+    "evidence": [
+      "New outbound TCP connections on port 443 observed post-install",
+      "Creation of non-standard marker files: /tmp/hazmat-demo-marker.txt and /var/tmp/hazmat-demo-marker.txt",
+      "Install script activity identified as a potential beaconing mechanism"
+    ],
+    "reasoning_mode": "llm_gemini",
+    "risk_level": "high",
+    "summary": "The package installation triggered suspicious network activity and created beacon-like artifacts in temporary directories, suggesting potential post-installation exfiltration or command-and-control behavior.",
+    "verdict": "suspicious"
+  },
+  "install_response": {
+    "action": "execute_install",
+    "exit_code": 0,
+    "install": {
+      "exit_code": 0,
+      "install_target": "/tmp/hazmat-artifacts/react-helper-dom-1.0.0.tgz",
+      "manager": "npm",
+      "output_preview": "\nadded 1 package in 3s\n",
+      "package_name": null,
+      "package_source": "/home/abhay/projects/solaris/demo_packages/react-helper-dom/react-helper-dom-1.0.0.tgz",
+      "source_mode": "local_tgz",
+      "staged_container_path": "/tmp/hazmat-artifacts/react-helper-dom-1.0.0.tgz"
+    },
+    "manager": "npm",
+    "message": "Install finished",
+    "ok": true,
+    "output": "\nadded 1 package in 3s\n",
+    "package": null,
+    "package_source": "/home/abhay/projects/solaris/demo_packages/react-helper-dom/react-helper-dom-1.0.0.tgz",
+    "session_id": "hazmat-d3e33292-d7e2-41ca-b378-d3e0fe0b939b",
+    "status": "ok"
+  },
+  "llm_debug": {
+    "attempted": true,
+    "error_message": null,
+    "error_type": null,
+    "path": "llm_success",
+    "raw_preview": "{\n  \"verdict\": \"suspicious\",\n  \"risk_level\": \"high\",\n  \"evidence\": [\n    \"New outbound TCP connections on port 443 observed post-install\",\n    \"Creation of non-standard marker files: /tmp/hazmat-demo-",
+    "used_model": "gemini-3.1-flash-lite-preview"
+  },
+  "manager": "npm",
+  "package_name": "local-artifact",
+  "package_source": "/home/abhay/projects/solaris/demo_packages/react-helper-dom/react-helper-dom-1.0.0.tgz",
+  "precheck": {
+    "reason": null,
+    "suspected": false
+  },
+  "session_id": "hazmat-d3e33292-d7e2-41ca-b378-d3e0fe0b939b",
+  "spin_response": {
+    "action": "spin_up_sandbox",
+    "base_image": "node:20-slim",
+    "container_id": "28b48758381d22375c029c22ec10c1af268265043ca5ded057bc261b6be5c082",
+    "manager": "npm",
+    "message": "Sandbox ready",
+    "ok": true,
+    "session_id": "hazmat-d3e33292-d7e2-41ca-b378-d3e0fe0b939b",
+    "status": "ok"
+  },
+  "telemetry_response": {
+    "action": "get_telemetry",
+    "ok": true,
+    "status": "ok",
+    "telemetry": {
+      "alerts": [
+        "Suspicious Outbound Connection: New outbound TCP connections observed after install phase.",
+        "Install Script Artifact Detected: New marker/beacon-like files were created in temp directories."
+      ],
+      "classification": {
+        "expected_activity": [
+          "Outbound traffic uses web ports (80/443); verify destination context because HTTPS can still carry exfiltration."
+        ],
+        "suspicious_indicators": [
+          "Outbound TCP destinations observed: 443",
+          "Install created suspicious temp artifacts: /tmp/hazmat-demo-marker.txt, /var/tmp/hazmat-demo-marker.txt"
+        ]
+      },
+      "filesystem": {
+        "added_paths_head": [
+          "/root/.npm/_logs/2026-04-08T17_26_17_458Z-debug-0.log",
+          "/root/.npm/_update-notifier-last-checked",
+          "/tmp/hazmat-demo-marker.txt",
+          "/var/tmp/hazmat-demo-marker.txt"
+        ],
+        "after_tail": [
+          "## /tmp",
+          "1775669178.5226612620 79 /tmp/hazmat-demo-marker.txt",
+          "0.0000000000 1184 /tmp/hazmat-artifacts/react-helper-dom-1.0.0.tgz",
+          "## /var/tmp",
+          "1775669178.5267060270 79 /var/tmp/hazmat-demo-marker.txt",
+          "## /root",
+          "1775669180.6065976260 1323 /root/.npm/_logs/2026-04-08T17_26_17_458Z-debug-0.log",
+          "1775669178.1382960520 0 /root/.npm/_update-notifier-last-checked",
+          "1618084800.0000000000 571 /root/.bashrc",
+          "1562666750.0000000000 161 /root/.profile",
+          "## /home",
+          "1757196426.0000000000 807 /home/node/.profile",
+          "1757196426.0000000000 3526 /home/node/.bashrc",
+          "1757196426.0000000000 220 /home/node/.bash_logout"
+        ],
+        "before_tail": [
+          "## /tmp",
+          "0.0000000000 1184 /tmp/hazmat-artifacts/react-helper-dom-1.0.0.tgz",
+          "## /var/tmp",
+          "## /root",
+          "1618084800.0000000000 571 /root/.bashrc",
+          "1562666750.0000000000 161 /root/.profile",
+          "## /home",
+          "1757196426.0000000000 807 /home/node/.profile",
+          "1757196426.0000000000 3526 /home/node/.bashrc",
+          "1757196426.0000000000 220 /home/node/.bash_logout"
+        ],
+        "changed": true,
+        "has_credential_markers": false,
+        "has_expected_install_markers": true,
+        "suspicious_install_artifacts": [
+          "/tmp/hazmat-demo-marker.txt",
+          "/var/tmp/hazmat-demo-marker.txt"
+        ]
+      },
+      "install": {
+        "exit_code": 0,
+        "install_target": "/tmp/hazmat-artifacts/react-helper-dom-1.0.0.tgz",
+        "manager": "npm",
+        "output_preview": "\nadded 1 package in 3s\n",
+        "package_name": null,
+        "package_source": "/home/abhay/projects/solaris/demo_packages/react-helper-dom/react-helper-dom-1.0.0.tgz",
+        "source_mode": "local_tgz",
+        "staged_container_path": "/tmp/hazmat-artifacts/react-helper-dom-1.0.0.tgz"
+      },
+      "network": {
+        "tcp6_added": [],
+        "tcp_added": [
+          {
+            "remote_ip_hex": "22091068",
+            "remote_port": 443,
+            "state_hex": "05"
+          }
+        ],
+        "unusual_outbound": [],
+        "verdict": "suspicious"
+      },
+      "notes": [],
+      "processes": {
+        "current_head": [
+          "ps_not_found",
+          "1",
+          "11",
+          "120",
+          "129",
+          "130",
+          "131",
+          "acpi",
+          "buddyinfo",
+          "bus",
+          "cgroups",
+          "cmdline",
+          "config.gz",
+          "consoles",
+          "cpuinfo",
+          "crypto",
+          "devices",
+          "diskstats",
+          "dma",
+          "driver",
+          "dynamic_debug",
+          "execdomains",
+          "fb",
+          "filesystems",
+          "fs",
+          "interrupts",
+          "iomem",
+          "ioports",
+          "irq",
+          "kallsyms",
+          "kcore",
+          "key-users",
+          "keys",
+          "kmsg",
+          "kpagecgroup",
+          "kpagecount",
+          "kpageflags",
+          "latency_stats",
+          "loadavg",
+          "locks",
+          "meminfo",
+          "misc",
+          "modules",
+          "mounts",
+          "mpt",
+          "mtrr",
+          "net",
+          "pagetypeinfo",
+          "partitions",
+          "pressure",
+          "schedstat",
+          "scsi",
+          "self",
+          "slabinfo",
+          "softirqs",
+          "stat",
+          "swaps",
+          "sys",
+          "sysrq-trigger",
+          "sysvipc"
+        ]
+      },
+      "risk_level": "high",
+      "session_id": "hazmat-d3e33292-d7e2-41ca-b378-d3e0fe0b939b",
+      "summary": "2 suspicious activities detected."
+    }
+  }
+}

@@ -1,0 +1,179 @@
+{
+  "cleanup_response": {
+    "action": "nuke_sandbox",
+    "message": "Sandbox destroyed. All evidence has been eliminated.",
+    "ok": true,
+    "session_id": "hazmat-7174ca32-6c6c-46dd-8a58-8e8b86c38c49",
+    "status": "ok"
+  },
+  "error": null,
+  "final_verdict": {
+    "evidence": [
+      "Manager mismatch suspected: known_npm_package_used_with_pip",
+      "Install command returned non-zero exit code (1)",
+      "python setup.py egg_info did not run successfully",
+      "package directory 'lodash' does not exist"
+    ],
+    "reasoning_mode": "llm_gemini",
+    "risk_level": "medium",
+    "summary": "Possible manager/package mismatch (known_npm_package_used_with_pip). Re-test with the likely correct manager before treating as malware.",
+    "verdict": "suspicious"
+  },
+  "install_response": {
+    "action": "execute_install",
+    "exit_code": 1,
+    "install": {
+      "exit_code": 1,
+      "install_target": "lodash",
+      "manager": "pip",
+      "output_preview": "Collecting lodash\n  Downloading lodash-0.0.1.tar.gz (523 bytes)\n  Preparing metadata (setup.py): started\n  Preparing metadata (setup.py): finished with status 'error'\n  error: subprocess-exited-with-error\n  \n  \u00d7 python setup.py egg_info did not run successfully.\n  \u2502 exit code: 1\n  \u2570\u2500> [17 lines of output]\n      /usr/local/lib/python3.11/site-packages/setuptools/dist.py:599: SetuptoolsDeprecationWarning: Invalid dash-separated key 'description-file' in 'metadata' (setup.cfg), please use the underscore name 'description_file' instead.\n      !!\n      \n              ********************************************************************************\n              Usage of dash-separated 'description-file' will not be supported in future\n              versions. Please use the underscore name 'description_file' instead.\n              (Affected: lodash).\n      \n              This deprecation is overdue, please update your project and remove deprecated\n              calls to avoid build errors in the future.\n      \n              See https://setuptools.pypa.io/en/latest/userguide/declarative_config.html for details.\n              ********************************************************************************\n      \n      !!\n        opt = self._enforce_underscore(opt, section)\n      error: package directory 'lodash' does not exist\n      [end of output]\n  \n  note: This error originates from a subprocess, and is likely not a problem with pip.\nerror: metadata-generation-failed\n\n\u00d7 Encountered error while generating package metadata.\n\u2570\u2500> See above for output.\n\nnote: This is an issue with the package mentioned above, not pip.\nhint: See above for details.\n\n[notice] A new release of pip is available: 24.0 -> 26.0.1\n[notice] To update, run: pip install --upgrade pip\n",
+      "package_name": "lodash",
+      "package_source": null,
+      "source_mode": "package_name",
+      "staged_container_path": null
+    },
+    "manager": "pip",
+    "message": "Install finished",
+    "ok": true,
+    "output": "Collecting lodash\n  Downloading lodash-0.0.1.tar.gz (523 bytes)\n  Preparing metadata (setup.py): started\n  Preparing metadata (setup.py): finished with status 'error'\n  error: subprocess-exited-with-error\n  \n  \u00d7 python setup.py egg_info did not run successfully.\n  \u2502 exit code: 1\n  \u2570\u2500> [17 lines of output]\n      /usr/local/lib/python3.11/site-packages/setuptools/dist.py:599: SetuptoolsDeprecationWarning: Invalid dash-separated key 'description-file' in 'metadata' (setup.cfg), please use the underscore name 'description_file' instead.\n      !!\n      \n              ********************************************************************************\n              Usage of dash-separated 'description-file' will not be supported in future\n              versions. Please use the underscore name 'description_file' instead.\n              (Affected: lodash).\n      \n              This deprecation is overdue, please update your project and remove deprecated\n              calls to avoid build errors in the future.\n      \n              See https://setuptools.pypa.io/en/latest/userguide/declarative_config.html for details.\n              ********************************************************************************\n      \n      !!\n        opt = self._enforce_underscore(opt, section)\n      error: package directory 'lodash' does not exist\n      [end of output]\n  \n  note: This error originates from a subprocess, and is likely not a problem with pip.\nerror: metadata-generation-failed\n\n\u00d7 Encountered error while generating package metadata.\n\u2570\u2500> See above for output.\n\nnote: This is an issue with the package mentioned above, not pip.\nhint: See above for details.\n\n[notice] A new release of pip is available: 24.0 -> 26.0.1\n[notice] To update, run: pip install --upgrade pip\n",
+    "package": "lodash",
+    "package_source": null,
+    "session_id": "hazmat-7174ca32-6c6c-46dd-8a58-8e8b86c38c49",
+    "status": "ok"
+  },
+  "llm_debug": {
+    "attempted": true,
+    "error_message": null,
+    "error_type": null,
+    "path": "llm_success",
+    "raw_preview": "{\n  \"verdict\": \"suspicious\",\n  \"risk_level\": \"medium\",\n  \"evidence\": [\n    \"Install command returned non-zero exit code (1)\",\n    \"python setup.py egg_info did not run successfully\",\n    \"package dire",
+    "used_model": "gemini-3.1-flash-lite-preview"
+  },
+  "manager": "pip",
+  "package_name": "lodash",
+  "package_source": "",
+  "precheck": {
+    "reason": "known_npm_package_used_with_pip",
+    "suspected": true
+  },
+  "session_id": "hazmat-7174ca32-6c6c-46dd-8a58-8e8b86c38c49",
+  "spin_response": {
+    "action": "spin_up_sandbox",
+    "base_image": "python:3.11-slim",
+    "container_id": "f9d04b764dbd52582d9801814847198e28698faecf8b0ab44672dad00b2a3830",
+    "manager": "pip",
+    "message": "Sandbox ready",
+    "ok": true,
+    "session_id": "hazmat-7174ca32-6c6c-46dd-8a58-8e8b86c38c49",
+    "status": "ok"
+  },
+  "telemetry_response": {
+    "action": "get_telemetry",
+    "ok": true,
+    "status": "ok",
+    "telemetry": {
+      "alerts": [
+        "Install command returned non-zero exit code (1)."
+      ],
+      "classification": {
+        "expected_activity": [],
+        "suspicious_indicators": [
+          "Install command failed with exit code 1."
+        ]
+      },
+      "filesystem": {
+        "added_paths_head": [],
+        "after_tail": [],
+        "before_tail": [],
+        "changed": false,
+        "has_credential_markers": false,
+        "has_expected_install_markers": false,
+        "suspicious_install_artifacts": []
+      },
+      "install": {
+        "exit_code": 1,
+        "install_target": "lodash",
+        "manager": "pip",
+        "output_preview": "Collecting lodash\n  Downloading lodash-0.0.1.tar.gz (523 bytes)\n  Preparing metadata (setup.py): started\n  Preparing metadata (setup.py): finished with status 'error'\n  error: subprocess-exited-with-error\n  \n  \u00d7 python setup.py egg_info did not run successfully.\n  \u2502 exit code: 1\n  \u2570\u2500> [17 lines of output]\n      /usr/local/lib/python3.11/site-packages/setuptools/dist.py:599: SetuptoolsDeprecationWarning: Invalid dash-separated key 'description-file' in 'metadata' (setup.cfg), please use the underscore name 'description_file' instead.\n      !!\n      \n              ********************************************************************************\n              Usage of dash-separated 'description-file' will not be supported in future\n              versions. Please use the underscore name 'description_file' instead.\n              (Affected: lodash).\n      \n              This deprecation is overdue, please update your project and remove deprecated\n              calls to avoid build errors in the future.\n      \n              See https://setuptools.pypa.io/en/latest/userguide/declarative_config.html for details.\n              ********************************************************************************\n      \n      !!\n        opt = self._enforce_underscore(opt, section)\n      error: package directory 'lodash' does not exist\n      [end of output]\n  \n  note: This error originates from a subprocess, and is likely not a problem with pip.\nerror: metadata-generation-failed\n\n\u00d7 Encountered error while generating package metadata.\n\u2570\u2500> See above for output.\n\nnote: This is an issue with the package mentioned above, not pip.\nhint: See above for details.\n\n[notice] A new release of pip is available: 24.0 -> 26.0.1\n[notice] To update, run: pip install --upgrade pip\n",
+        "package_name": "lodash",
+        "package_source": null,
+        "source_mode": "package_name",
+        "staged_container_path": null
+      },
+      "network": {
+        "tcp6_added": [],
+        "tcp_added": [],
+        "unusual_outbound": [],
+        "verdict": "clean"
+      },
+      "notes": [],
+      "processes": {
+        "current_head": [
+          "ps_not_found",
+          "1",
+          "10",
+          "103",
+          "104",
+          "105",
+          "94",
+          "acpi",
+          "buddyinfo",
+          "bus",
+          "cgroups",
+          "cmdline",
+          "config.gz",
+          "consoles",
+          "cpuinfo",
+          "crypto",
+          "devices",
+          "diskstats",
+          "dma",
+          "driver",
+          "dynamic_debug",
+          "execdomains",
+          "fb",
+          "filesystems",
+          "fs",
+          "interrupts",
+          "iomem",
+          "ioports",
+          "irq",
+          "kallsyms",
+          "kcore",
+          "key-users",
+          "keys",
+          "kmsg",
+          "kpagecgroup",
+          "kpagecount",
+          "kpageflags",
+          "latency_stats",
+          "loadavg",
+          "locks",
+          "meminfo",
+          "misc",
+          "modules",
+          "mounts",
+          "mpt",
+          "mtrr",
+          "net",
+          "pagetypeinfo",
+          "partitions",
+          "pressure",
+          "schedstat",
+          "scsi",
+          "self",
+          "slabinfo",
+          "softirqs",
+          "stat",
+          "swaps",
+          "sys",
+          "sysrq-trigger",
+          "sysvipc"
+        ]
+      },
+      "risk_level": "medium",
+      "session_id": "hazmat-7174ca32-6c6c-46dd-8a58-8e8b86c38c49",
+      "summary": "1 suspicious activities detected."
+    }
+  }
+}

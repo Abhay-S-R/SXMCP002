@@ -1,0 +1,187 @@
+Running Hazmat agent with timeout...
+  package: this-package-should-not-exist-xyz123
+  manager: pip
+  timeout: 75s
+
+Processing request of type CallToolRequest
+Processing request of type ListToolsRequest
+Processing request of type CallToolRequest
+Processing request of type CallToolRequest
+Processing request of type CallToolRequest
+{
+  "cleanup_response": {
+    "action": "nuke_sandbox",
+    "message": "Sandbox destroyed. All evidence has been eliminated.",
+    "ok": true,
+    "session_id": "hazmat-75339874-e649-46d3-b04a-decf888705af",
+    "status": "ok"
+  },
+  "error": null,
+  "final_verdict": {
+    "evidence": [
+      "Install command returned non-zero exit code (1)",
+      "ERROR: No matching distribution found for this-package-should-not-exist-xyz123"
+    ],
+    "reasoning_mode": "llm_gemini",
+    "risk_level": "low",
+    "summary": "The installation attempt failed because the requested package does not exist in the repository; no malicious activity or system changes were observed.",
+    "verdict": "safe"
+  },
+  "install_response": {
+    "action": "execute_install",
+    "exit_code": 1,
+    "install": {
+      "exit_code": 1,
+      "install_target": "this-package-should-not-exist-xyz123",
+      "manager": "pip",
+      "output_preview": "ERROR: Could not find a version that satisfies the requirement this-package-should-not-exist-xyz123 (from versions: none)\nERROR: No matching distribution found for this-package-should-not-exist-xyz123\n\n[notice] A new release of pip is available: 24.0 -> 26.0.1\n[notice] To update, run: pip install --upgrade pip\n",
+      "package_name": "this-package-should-not-exist-xyz123",
+      "package_source": null,
+      "source_mode": "package_name",
+      "staged_container_path": null
+    },
+    "manager": "pip",
+    "message": "Install finished",
+    "ok": true,
+    "output": "ERROR: Could not find a version that satisfies the requirement this-package-should-not-exist-xyz123 (from versions: none)\nERROR: No matching distribution found for this-package-should-not-exist-xyz123\n\n[notice] A new release of pip is available: 24.0 -> 26.0.1\n[notice] To update, run: pip install --upgrade pip\n",
+    "package": "this-package-should-not-exist-xyz123",
+    "package_source": null,
+    "session_id": "hazmat-75339874-e649-46d3-b04a-decf888705af",
+    "status": "ok"
+  },
+  "llm_debug": {
+    "attempted": true,
+    "error_message": null,
+    "error_type": null,
+    "path": "llm_success",
+    "raw_preview": "{\n  \"verdict\": \"safe\",\n  \"risk_level\": \"low\",\n  \"evidence\": [\n    \"Install command returned non-zero exit code (1)\",\n    \"ERROR: No matching distribution found for this-package-should-not-exist-xyz123",
+    "used_model": "gemini-3.1-flash-lite-preview"
+  },
+  "manager": "pip",
+  "package_name": "this-package-should-not-exist-xyz123",
+  "package_source": "",
+  "precheck": {
+    "reason": null,
+    "suspected": false
+  },
+  "session_id": "hazmat-75339874-e649-46d3-b04a-decf888705af",
+  "spin_response": {
+    "action": "spin_up_sandbox",
+    "base_image": "python:3.11-slim",
+    "container_id": "50e5b995c93690050527bf47ca9162854d8c23bc96a124020d1a498b229abd7b",
+    "manager": "pip",
+    "message": "Sandbox ready",
+    "ok": true,
+    "session_id": "hazmat-75339874-e649-46d3-b04a-decf888705af",
+    "status": "ok"
+  },
+  "telemetry_response": {
+    "action": "get_telemetry",
+    "ok": true,
+    "status": "ok",
+    "telemetry": {
+      "alerts": [
+        "Install command returned non-zero exit code (1)."
+      ],
+      "classification": {
+        "expected_activity": [],
+        "suspicious_indicators": [
+          "Install command failed with exit code 1."
+        ]
+      },
+      "filesystem": {
+        "added_paths_head": [],
+        "after_tail": [],
+        "before_tail": [],
+        "changed": false,
+        "has_credential_markers": false,
+        "has_expected_install_markers": false,
+        "suspicious_install_artifacts": []
+      },
+      "install": {
+        "exit_code": 1,
+        "install_target": "this-package-should-not-exist-xyz123",
+        "manager": "pip",
+        "output_preview": "ERROR: Could not find a version that satisfies the requirement this-package-should-not-exist-xyz123 (from versions: none)\nERROR: No matching distribution found for this-package-should-not-exist-xyz123\n\n[notice] A new release of pip is available: 24.0 -> 26.0.1\n[notice] To update, run: pip install --upgrade pip\n",
+        "package_name": "this-package-should-not-exist-xyz123",
+        "package_source": null,
+        "source_mode": "package_name",
+        "staged_container_path": null
+      },
+      "network": {
+        "tcp6_added": [],
+        "tcp_added": [],
+        "unusual_outbound": [],
+        "verdict": "clean"
+      },
+      "notes": [],
+      "processes": {
+        "current_head": [
+          "ps_not_found",
+          "1",
+          "10",
+          "103",
+          "104",
+          "105",
+          "94",
+          "acpi",
+          "buddyinfo",
+          "bus",
+          "cgroups",
+          "cmdline",
+          "config.gz",
+          "consoles",
+          "cpuinfo",
+          "crypto",
+          "devices",
+          "diskstats",
+          "dma",
+          "driver",
+          "dynamic_debug",
+          "execdomains",
+          "fb",
+          "filesystems",
+          "fs",
+          "interrupts",
+          "iomem",
+          "ioports",
+          "irq",
+          "kallsyms",
+          "kcore",
+          "key-users",
+          "keys",
+          "kmsg",
+          "kpagecgroup",
+          "kpagecount",
+          "kpageflags",
+          "latency_stats",
+          "loadavg",
+          "locks",
+          "meminfo",
+          "misc",
+          "modules",
+          "mounts",
+          "mpt",
+          "mtrr",
+          "net",
+          "pagetypeinfo",
+          "partitions",
+          "pressure",
+          "schedstat",
+          "scsi",
+          "self",
+          "slabinfo",
+          "softirqs",
+          "stat",
+          "swaps",
+          "sys",
+          "sysrq-trigger",
+          "sysvipc"
+        ]
+      },
+      "risk_level": "medium",
+      "session_id": "hazmat-75339874-e649-46d3-b04a-decf888705af",
+      "summary": "1 suspicious activities detected."
+    }
+  }
+}
