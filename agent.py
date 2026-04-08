@@ -16,6 +16,7 @@ load_dotenv()
 
 class AgentState(TypedDict, total=False):
     package_name: str
+    package_source: str
     manager: str
     session_id: str
     spin_response: Dict[str, Any]
@@ -95,10 +96,16 @@ async def node_spin_up(state: AgentState) -> AgentState:
 async def node_install(state: AgentState) -> AgentState:
     if state.get("error"):
         return {"mcp_session": state["mcp_session"]}
+    install_args: Dict[str, Any] = {"manager": state["manager"]}
+    if state.get("package_source"):
+        install_args["package_source"] = state["package_source"]
+    else:
+        install_args["package_name"] = state["package_name"]
+
     resp = await _call_mcp_tool(
         state["mcp_session"],
         "execute_install",
-        {"package_name": state["package_name"], "manager": state["manager"]},
+        install_args,
     )
     next_state: AgentState = {"install_response": resp, "mcp_session": state["mcp_session"]}
     if not resp.get("ok"):
@@ -185,35 +192,37 @@ def _manager_mismatch_precheck(package_name: str, manager: str) -> Dict[str, Any
 def _looks_like_expected_npm_install_noise(telemetry: Dict[str, Any], manager: str) -> bool:
     if (manager or "").strip().lower() != "npm":
         return False
-    alerts = telemetry.get("alerts") or []
-    if not alerts:
-        return False
-
     install = telemetry.get("install") or {}
     if install.get("exit_code") != 0:
         return False
 
     network = telemetry.get("network") or {}
-    tcp_added = network.get("tcp_added") or []
+    tcp_added = (network.get("tcp_added") or []) + (network.get("tcp6_added") or [])
     if not tcp_added:
         return False
-    # npm registry and similar normal installs are usually outbound 443
-    if not all((item or {}).get("remote_port") == 443 for item in tcp_added):
+    unusual_outbound = network.get("unusual_outbound") or []
+    if unusual_outbound:
         return False
 
     fs = telemetry.get("filesystem") or {}
     if not fs.get("changed"):
         return False
-    after_tail = "\n".join(fs.get("after_tail") or [])
-    npm_markers = ["/root/.npm/", "_update-notifier-last-checked", "_logs/"]
-    if not any(marker in after_tail for marker in npm_markers):
+    if not fs.get("has_expected_install_markers"):
+        return False
+    if fs.get("has_credential_markers"):
         return False
 
-    alert_text = " | ".join(alerts).lower()
-    has_only_expected_alert_types = (
-        "outbound connection" in alert_text and "file access/creation detected" in alert_text
-    )
-    return has_only_expected_alert_types
+    classification = telemetry.get("classification") or {}
+    suspicious_indicators = classification.get("suspicious_indicators") or []
+    # Allow the specific generic indicator emitted for web-port outbound:
+    # "Outbound TCP destinations observed: 443"
+    # This alone should not force suspicious for normal npm registry traffic.
+    non_generic_indicators = [
+        s for s in suspicious_indicators if "outbound tcp destinations observed" not in str(s).lower()
+    ]
+    if non_generic_indicators:
+        return False
+    return True
 
 
 def _apply_post_analysis_guards(
@@ -373,7 +382,11 @@ def _build_graph():
     return graph.compile()
 
 
-async def _run_hazmat_audit_async(package_name: str, manager: str = "pip") -> Dict[str, Any]:
+async def _run_hazmat_audit_async(
+    package_name: str,
+    manager: str = "pip",
+    package_source: Optional[str] = None,
+) -> Dict[str, Any]:
     app = _build_graph()
     server_params = StdioServerParameters(
         command=sys.executable,
@@ -385,12 +398,14 @@ async def _run_hazmat_audit_async(package_name: str, manager: str = "pip") -> Di
             await session.initialize()
             initial: AgentState = {
                 "package_name": package_name,
+                "package_source": package_source or "",
                 "manager": manager,
                 "mcp_session": session,
             }
             result = await app.ainvoke(initial)
             return {
                 "package_name": package_name,
+                "package_source": result.get("package_source"),
                 "manager": manager,
                 "session_id": result.get("session_id"),
                 "spin_response": result.get("spin_response"),
@@ -404,14 +419,21 @@ async def _run_hazmat_audit_async(package_name: str, manager: str = "pip") -> Di
             }
 
 
-def run_hazmat_audit(package_name: str, manager: str = "pip") -> Dict[str, Any]:
+def run_hazmat_audit(package_name: str, manager: str = "pip", package_source: Optional[str] = None) -> Dict[str, Any]:
     import asyncio
 
-    return asyncio.run(_run_hazmat_audit_async(package_name=package_name, manager=manager))
+    return asyncio.run(
+        _run_hazmat_audit_async(
+            package_name=package_name,
+            manager=manager,
+            package_source=package_source,
+        )
+    )
 
 
 if __name__ == "__main__":
     pkg = os.getenv("HAZMAT_PACKAGE", "requests")
+    pkg_source = os.getenv("HAZMAT_PACKAGE_SOURCE")
     mgr = os.getenv("HAZMAT_MANAGER", "pip")
-    output = run_hazmat_audit(package_name=pkg, manager=mgr)
+    output = run_hazmat_audit(package_name=pkg, manager=mgr, package_source=pkg_source)
     print(json.dumps(output, indent=2, sort_keys=True))
