@@ -528,7 +528,29 @@ def _load_batch_specs(batch_file: str, default_manager: str) -> List[Dict[str, s
     return specs
 
 
-def _print_batch_summary(results: List[Dict[str, Any]]) -> None:
+def _verdict_style(verdict: str) -> str:
+    v = (verdict or "unknown").upper()
+    if v == "SAFE":
+        return "green"
+    if v == "SUSPICIOUS":
+        return "yellow"
+    if v == "MALICIOUS":
+        return "red"
+    return "dim"
+
+
+def _risk_style(risk: str) -> str:
+    r = (risk or "unknown").upper()
+    if r == "LOW":
+        return "green"
+    if r == "MEDIUM":
+        return "yellow"
+    if r in {"HIGH", "CRITICAL"}:
+        return "red"
+    return "dim"
+
+
+def _print_batch_summary_plain(results: List[Dict[str, Any]]) -> None:
     _section("Batch Summary")
     rows: List[str] = []
     for item in results:
@@ -538,6 +560,49 @@ def _print_batch_summary(results: List[Dict[str, Any]]) -> None:
         rows.append(f"{target} | {item.get('manager')} | {verdict}/{risk}")
     _box("Results", rows or ["No batch results."])
     print()
+
+
+def _print_batch_summary_rich(results: List[Dict[str, Any]]) -> None:
+    console = Console()
+    console.print()
+    table = Table(
+        show_header=True,
+        header_style="bold cyan",
+        box=box.ROUNDED,
+        title="Results",
+        expand=True,
+        pad_edge=False,
+    )
+    table.add_column("#", justify="right", style="dim", width=4)
+    table.add_column("Target", style="white", ratio=2, overflow="ellipsis")
+    table.add_column("Manager", style="magenta", width=6, no_wrap=True)
+    table.add_column("Verdict", width=12, no_wrap=True)
+    table.add_column("Risk", width=10, no_wrap=True)
+    if not results:
+        table.add_row("—", "[dim]No batch results.[/dim]", "—", "—", "—")
+    else:
+        for idx, item in enumerate(results, start=1):
+            verdict = ((item.get("final_verdict") or {}).get("verdict") or "unknown").upper()
+            risk = ((item.get("final_verdict") or {}).get("risk_level") or "unknown").upper()
+            target = str(item.get("package_source") or item.get("package_name") or "")
+            vs, rs = _verdict_style(verdict), _risk_style(risk)
+            mgr = str(item.get("manager") or "")
+            table.add_row(
+                str(idx),
+                target,
+                mgr,
+                f"[{vs}]{verdict}[/{vs}]",
+                f"[{rs}]{risk}[/{rs}]",
+            )
+    console.print(Panel(table, title="[bold]Batch Summary[/bold]", border_style="cyan", title_align="left"))
+    console.print()
+
+
+def _print_batch_summary(results: List[Dict[str, Any]]) -> None:
+    if _HAS_RICH and sys.stdout.isatty():
+        _print_batch_summary_rich(results)
+    else:
+        _print_batch_summary_plain(results)
 
 
 def _run_batch_live_dashboard(specs: List[Dict[str, str]], timeout_s: int, workers: int) -> List[Dict[str, Any]]:
