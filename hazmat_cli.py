@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+
 import argparse
 import json
 import os
+import shutil
 import re
 import sys
 import threading
@@ -9,13 +11,14 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, wait
 from typing import Any, Dict, List
 
-from agent import run_hazmat_audit
 
 try:
     from rich.console import Console
     from rich.live import Live
     from rich.panel import Panel
     from rich.table import Table
+    from rich.text import Text
+    from rich import box
 
     _HAS_RICH = True
 except Exception:
@@ -116,6 +119,7 @@ def _print_human(result: Dict[str, Any]) -> None:
 
     print(_color("HAZMAT-MCP // DYNAMIC SUPPLY CHAIN AUDIT", "1"))
     print(_color("=========================================", "90"))
+    print()
 
     package_display = result.get("package_source") or result.get("package_name")
     elapsed = install.get("elapsed_s")
@@ -130,6 +134,7 @@ def _print_human(result: Dict[str, Any]) -> None:
         ],
     )
     print()
+    print()
 
     _box(
         "Security Verdict",
@@ -141,9 +146,11 @@ def _print_human(result: Dict[str, Any]) -> None:
         ],
     )
     print()
+    print()
 
     _section("Summary")
     print(summary)
+    print()
     print()
 
     if precheck.get("suspected"):
@@ -151,11 +158,13 @@ def _print_human(result: Dict[str, Any]) -> None:
         print(_color("Possible manager mismatch detected.", "33"))
         print(f"Reason: {precheck.get('reason')}")
         print()
+        print()
 
     if evidence:
         _section("Evidence")
         for item in evidence:
             print(f"- {_truncate(item)}")
+        print()
         print()
 
     _section("Telemetry Snapshot")
@@ -166,6 +175,7 @@ def _print_human(result: Dict[str, Any]) -> None:
         f"Indicators         : {len(_as_list(classification.get('suspicious_indicators')))}",
     ]
     _box("Runtime Signals", telemetry_rows)
+    print()
     print()
 
     # When analysis has already normalized expected npm install behavior to SAFE/LOW,
@@ -187,6 +197,7 @@ def _print_human(result: Dict[str, Any]) -> None:
         for item in alerts[:8]:
             print(f"- {_truncate(item)}")
         print()
+        print()
 
     if llm_debug:
         _section("LLM Debug")
@@ -195,6 +206,7 @@ def _print_human(result: Dict[str, Any]) -> None:
         print(f"model     : {llm_debug.get('used_model')}")
         if llm_debug.get("error_type"):
             print(f"error     : {llm_debug.get('error_type')}: {llm_debug.get('error_message')}")
+        print()
         print()
 
     if result.get("error"):
@@ -207,6 +219,7 @@ def _print_human_rich(result: Dict[str, Any]) -> None:
         _print_human(result)
         return
     console = Console()
+    console.print()
     final_verdict = result.get("final_verdict") or {}
     telemetry = ((result.get("telemetry_response") or {}).get("telemetry") or {})
     classification = telemetry.get("classification") or {}
@@ -226,6 +239,7 @@ def _print_human_rich(result: Dict[str, Any]) -> None:
     verdict_style = "green" if verdict == "SAFE" else ("yellow" if verdict == "SUSPICIOUS" else "red")
     risk_style = "green" if risk == "LOW" else ("yellow" if risk == "MEDIUM" else "red")
     console.rule("[bold cyan]Hazmat-MCP Dynamic Supply-Chain Audit[/bold cyan]")
+    console.print()
     package_display = result.get("package_source") or result.get("package_name")
     elapsed = install.get("elapsed_s")
     elapsed_display = f"{elapsed}s" if isinstance(elapsed, (int, float)) else "n/a"
@@ -238,6 +252,7 @@ def _print_human_rich(result: Dict[str, Any]) -> None:
     context.add_row("Session", str(result.get("session_id")))
     context.add_row("Install", f"exit_code={install.get('exit_code')} elapsed={elapsed_display}")
     console.print(Panel(context, title="Run Context", border_style="cyan"))
+    console.print()
 
     verdict_tbl = Table(show_header=False, box=None, pad_edge=False)
     verdict_tbl.add_column("k", style="bold cyan", width=12)
@@ -247,10 +262,13 @@ def _print_human_rich(result: Dict[str, Any]) -> None:
     verdict_tbl.add_row("Mode", reasoning_mode)
     verdict_tbl.add_row("Score", str(classification.get("risk_score", "n/a")))
     console.print(Panel(verdict_tbl, title="Security Verdict", border_style="magenta"))
+    console.print()
 
     console.print(Panel(summary, title="Summary", border_style="blue"))
+    console.print()
     if precheck.get("suspected"):
         console.print(Panel(f"Possible manager mismatch detected.\nReason: {precheck.get('reason')}", title="Precheck", border_style="yellow"))
+        console.print()
 
     if evidence:
         ev_table = Table(show_header=True, header_style="bold")
@@ -258,6 +276,7 @@ def _print_human_rich(result: Dict[str, Any]) -> None:
         for item in evidence[:8]:
             ev_table.add_row(_truncate(item, 150))
         console.print(Panel(ev_table, title="Evidence", border_style="green"))
+        console.print()
 
     snap = Table(show_header=False, box=None, pad_edge=False)
     snap.add_column("k", style="bold cyan", width=22)
@@ -267,6 +286,7 @@ def _print_human_rich(result: Dict[str, Any]) -> None:
     snap.add_row("New processes", str(len(_as_list(proc.get("added")))))
     snap.add_row("Indicators", str(len(_as_list(classification.get("suspicious_indicators")))))
     console.print(Panel(snap, title="Telemetry Snapshot", border_style="blue"))
+    console.print()
 
     if (
         verdict == "SAFE"
@@ -281,6 +301,7 @@ def _print_human_rich(result: Dict[str, Any]) -> None:
         for item in alerts[:8]:
             al_table.add_row(_truncate(item, 150))
         console.print(Panel(al_table, border_style="red"))
+        console.print()
 
     if llm_debug:
         dbg = Table(show_header=False, box=None, pad_edge=False)
@@ -292,6 +313,7 @@ def _print_human_rich(result: Dict[str, Any]) -> None:
         if llm_debug.get("error_type"):
             dbg.add_row("error", f"{llm_debug.get('error_type')}: {llm_debug.get('error_message')}")
         console.print(Panel(dbg, title="LLM Debug", border_style="yellow"))
+        console.print()
 
     if result.get("error"):
         console.print(Panel(str(result.get("error")), title="Agent Error", border_style="red"))
@@ -316,6 +338,12 @@ def _run_with_timeout(
     phase_index = {name: idx + 1 for idx, name in enumerate(phase_order)}
     progress = {"message": "Starting Hazmat agent", "phase_started_at": time.time(), "phase_num": 0}
     lock = threading.Lock()
+
+    spinner_enabled = show_progress and sys.stdout.isatty()
+    rich_enabled = spinner_enabled and _HAS_RICH
+    audit_console: Any = None
+    if rich_enabled:
+        audit_console = Console(file=sys.stdout, force_terminal=True)
 
     def _set_progress(msg: str) -> None:
         with lock:
@@ -348,29 +376,104 @@ def _run_with_timeout(
         sys.stdout.write(line)
         sys.stdout.flush()
 
-    spinner_enabled = show_progress and sys.stdout.isatty()
+    def _make_live_panel(frame_idx: int, finished: bool = False) -> Any:
+        with lock:
+            msg = progress["message"]
+            phase_num = progress["phase_num"]
+        total_elapsed = time.time() - start
+        n_phases = len(phase_order)
+        cw = audit_console.size.width if audit_console else shutil.get_terminal_size((80, 24)).columns
+        inner = max(20, min(56, cw - 28))
+        if phase_num <= 0:
+            pct, filled = 0, 0
+        else:
+            pct = min(100, int(round(100.0 * phase_num / n_phases)))
+            filled = min(inner, int(round(inner * phase_num / n_phases)))
+            if phase_num >= n_phases:
+                filled, pct = inner, 100
+        unfilled = inner - filled
+        progress_text = Text()
+        progress_text.append("[", style="cyan")
+        if filled:
+            progress_text.append("█" * filled, style="bold green")
+        if unfilled:
+            progress_text.append("░" * unfilled, style="dim white")
+        progress_text.append("]", style="cyan")
+        progress_text.append(f"  {pct}%", style="bold white")
+
+        if finished:
+            lead = Text("✓ " if not timed_out else "✗ ", style="bold green" if not timed_out else "bold red")
+        else:
+            lead = Text(spinner_frames[frame_idx % len(spinner_frames)] + " ", style="bold cyan")
+        title_text = Text.assemble(lead, ("Hazmat Audit", "bold cyan"))
+
+        step_val = f"{phase_num}/{n_phases}" if phase_num else "—"
+
+        table = Table(show_header=False, box=None, pad_edge=False)
+        table.add_column("k", style="bold cyan", width=12)
+        table.add_column("v")
+        table.add_row("Step", step_val)
+        table.add_row("Activity", msg)
+        table.add_row("Progress", progress_text)
+        table.add_row("Elapsed", f"{total_elapsed:0.1f}s")
+        if phase_num < n_phases:
+            table.add_row("Next", phase_order[phase_num])
+
+        return Panel(
+            table,
+            title=title_text,
+            title_align="center",
+            border_style="cyan",
+            box=box.ROUNDED,
+            padding=(2, 2),
+            expand=True,
+        )
+
+    from agent import run_hazmat_audit
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(run_hazmat_audit, package_name, manager, package_source, _set_progress)
         start = time.time()
         frame = 0
         timed_out = False
         result: Dict[str, Any] | None = None
-        while True:
-            elapsed = time.time() - start
-            remaining = max(0.0, timeout_seconds - elapsed)
-            if spinner_enabled:
-                _draw_spinner(frame, start)
-                frame += 1
-            try:
-                result = future.result(timeout=min(0.12, remaining))
-                break
-            except FuturesTimeoutError:
-                if elapsed >= timeout_seconds:
-                    timed_out = True
+        if rich_enabled:
+            with Live(
+                _make_live_panel(frame),
+                console=audit_console,
+                refresh_per_second=12,
+                transient=False,
+            ) as live:
+                while True:
+                    elapsed = time.time() - start
+                    remaining = max(0.0, timeout_seconds - elapsed)
+                    live.update(_make_live_panel(frame))
+                    frame += 1
+                    try:
+                        result = future.result(timeout=min(0.12, remaining))
+                        break
+                    except FuturesTimeoutError:
+                        if elapsed >= timeout_seconds:
+                            timed_out = True
+                            break
+                        continue
+                live.update(_make_live_panel(frame, finished=True))
+        else:
+            while True:
+                elapsed = time.time() - start
+                remaining = max(0.0, timeout_seconds - elapsed)
+                if spinner_enabled:
+                    _draw_spinner(frame, start)
+                    frame += 1
+                try:
+                    result = future.result(timeout=min(0.12, remaining))
                     break
-                continue
+                except FuturesTimeoutError:
+                    if elapsed >= timeout_seconds:
+                        timed_out = True
+                        break
+                    continue
 
-        if spinner_enabled:
+        if spinner_enabled and not rich_enabled:
             with lock:
                 done_msg = progress["message"] if not timed_out else "Timed out"
                 phase_num = progress["phase_num"]
@@ -548,7 +651,9 @@ def _run_batch_live_dashboard(specs: List[Dict[str, str]], timeout_s: int, worke
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Hazmat-MCP CLI wrapper for package audits")
+    invoked = os.path.basename(sys.argv[0])
+    prog = "hazmat" if invoked == "hazmat_cli.py" else invoked
+    parser = argparse.ArgumentParser(prog=prog, description="Hazmat-MCP CLI wrapper for package audits")
     parser.add_argument("--package", help="Package name (PyPI/npm)")
     parser.add_argument("--package-source", help="Local package artifact path (e.g. .tgz)")
     parser.add_argument("--batch-file", help="File with targets to scan (format: target[,manager])")
