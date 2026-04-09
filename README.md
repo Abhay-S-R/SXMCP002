@@ -146,6 +146,14 @@ source .venv/bin/activate
 python3 hazmat_cli.py --package requests --manager pip
 ```
 
+For judge/demo reliability, prefer timeout-enforced agent runs for edge/error cases:
+
+```bash
+chmod +x run_agent_timeout.sh
+./run_agent_timeout.sh requests pip 120
+./run_agent_timeout.sh this-package-should-not-exist-xyz123 pip 75
+```
+
 Raw JSON mode:
 
 ```bash
@@ -157,3 +165,32 @@ Custom timeout:
 ```bash
 python3 hazmat_cli.py --package requests --manager npm --timeout 120
 ```
+
+Batch parallel mode (target[,manager] per line):
+
+```bash
+cat > batch_targets.txt <<'EOF'
+lodash,npm
+requests,pip
+this-package-should-not-exist-xyz123,pip
+demo_packages/react-helper-dom/react-helper-dom-1.0.0.tgz,npm
+EOF
+
+python3 hazmat_cli.py --batch-file batch_targets.txt --parallel 4
+python3 hazmat_cli.py --batch-file batch_targets.txt --parallel 4 --raw-json
+python3 hazmat_cli.py --batch-file batch_targets.txt --parallel 4 --live
+```
+
+## Step 7: Integration hardening
+
+Run deterministic hardening checks:
+
+```bash
+chmod +x scripts/step7_hardening_tests.sh
+./scripts/step7_hardening_tests.sh
+```
+
+This script validates:
+- manager mismatch detection
+- nonexistent package handling through timeout runner
+- malicious local `.tgz` payload detection

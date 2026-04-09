@@ -3,7 +3,7 @@ import os
 import re
 import sys
 import uuid
-from typing import Any, Dict, Optional, TypedDict
+from typing import Any, Callable, Dict, Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
 from mcp.client.session import ClientSession
@@ -28,6 +28,7 @@ class AgentState(TypedDict, total=False):
     error: str
     mcp_session: Any
     precheck: Dict[str, Any]
+    progress_callback: Any
 
 
 def _parse_json_or_wrap(text: str) -> Dict[str, Any]:
@@ -80,14 +81,31 @@ async def _call_mcp_tool(session: ClientSession, tool_name: str, arguments: Dict
     return _parse_json_or_wrap(text)
 
 
+def _emit_progress(state: AgentState, message: str) -> None:
+    cb = state.get("progress_callback")
+    if not cb:
+        return
+    try:
+        cb(message)
+    except Exception:
+        # UI callbacks must never break audit execution flow.
+        pass
+
+
 async def node_spin_up(state: AgentState) -> AgentState:
+    _emit_progress(state, "Creating Docker sandbox")
     session_id = state.get("session_id") or f"hazmat-{uuid.uuid4()}"
     resp = await _call_mcp_tool(
         state["mcp_session"],
         "spin_up_sandbox",
         {"manager": state["manager"], "session_id": session_id},
     )
-    next_state: AgentState = {"session_id": session_id, "spin_response": resp, "mcp_session": state["mcp_session"]}
+    next_state: AgentState = {
+        "session_id": session_id,
+        "spin_response": resp,
+        "mcp_session": state["mcp_session"],
+        "progress_callback": state.get("progress_callback"),
+    }
     if not resp.get("ok"):
         next_state["error"] = f"spin_up_failed: {resp.get('message') or resp.get('error')}"
     return next_state
@@ -95,7 +113,8 @@ async def node_spin_up(state: AgentState) -> AgentState:
 
 async def node_install(state: AgentState) -> AgentState:
     if state.get("error"):
-        return {"mcp_session": state["mcp_session"]}
+        return {"mcp_session": state["mcp_session"], "progress_callback": state.get("progress_callback")}
+    _emit_progress(state, "Installing package in sandbox")
     install_args: Dict[str, Any] = {"manager": state["manager"]}
     if state.get("package_source"):
         install_args["package_source"] = state["package_source"]
@@ -105,9 +124,13 @@ async def node_install(state: AgentState) -> AgentState:
     resp = await _call_mcp_tool(
         state["mcp_session"],
         "execute_install",
-        install_args,
+        {"session_id": state.get("session_id"), **install_args},
     )
-    next_state: AgentState = {"install_response": resp, "mcp_session": state["mcp_session"]}
+    next_state: AgentState = {
+        "install_response": resp,
+        "mcp_session": state["mcp_session"],
+        "progress_callback": state.get("progress_callback"),
+    }
     if not resp.get("ok"):
         next_state["error"] = f"install_failed: {resp.get('message') or resp.get('error')}"
     return next_state
@@ -115,9 +138,18 @@ async def node_install(state: AgentState) -> AgentState:
 
 async def node_get_telemetry(state: AgentState) -> AgentState:
     if state.get("error"):
-        return {"mcp_session": state["mcp_session"]}
-    resp = await _call_mcp_tool(state["mcp_session"], "get_telemetry", {})
-    next_state: AgentState = {"telemetry_response": resp, "mcp_session": state["mcp_session"]}
+        return {"mcp_session": state["mcp_session"], "progress_callback": state.get("progress_callback")}
+    _emit_progress(state, "Collecting runtime telemetry")
+    resp = await _call_mcp_tool(
+        state["mcp_session"],
+        "get_telemetry",
+        {"session_id": state.get("session_id")},
+    )
+    next_state: AgentState = {
+        "telemetry_response": resp,
+        "mcp_session": state["mcp_session"],
+        "progress_callback": state.get("progress_callback"),
+    }
     if not resp.get("ok"):
         next_state["error"] = f"telemetry_failed: {resp.get('message') or resp.get('error')}"
     return next_state
@@ -332,7 +364,9 @@ async def node_analyze(state: AgentState) -> AgentState:
                 "raw_preview": None,
             },
             "mcp_session": state["mcp_session"],
+            "progress_callback": state.get("progress_callback"),
         }
+    _emit_progress(state, "Feeding telemetry to analyzer")
     telemetry = (state.get("telemetry_response") or {}).get("telemetry", {})
     llm, llm_debug = _gemini_first_verdict(telemetry)
     verdict = llm if llm else _rule_based_verdict(telemetry)
@@ -351,18 +385,20 @@ async def node_analyze(state: AgentState) -> AgentState:
         "llm_debug": llm_debug,
         "precheck": precheck,
         "mcp_session": state["mcp_session"],
+        "progress_callback": state.get("progress_callback"),
     }
 
 
 async def node_cleanup(state: AgentState) -> AgentState:
     # Always attempt cleanup, even if previous nodes failed.
+    _emit_progress(state, "Destroying sandbox")
     session_id = state.get("session_id")
     resp = await _call_mcp_tool(
         state["mcp_session"],
         "nuke_sandbox",
         {"session_id": session_id} if session_id else {},
     )
-    return {"cleanup_response": resp}
+    return {"cleanup_response": resp, "progress_callback": state.get("progress_callback")}
 
 
 def _build_graph():
@@ -386,6 +422,7 @@ async def _run_hazmat_audit_async(
     package_name: str,
     manager: str = "pip",
     package_source: Optional[str] = None,
+    progress_callback: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
     app = _build_graph()
     server_params = StdioServerParameters(
@@ -401,6 +438,7 @@ async def _run_hazmat_audit_async(
                 "package_source": package_source or "",
                 "manager": manager,
                 "mcp_session": session,
+                "progress_callback": progress_callback,
             }
             result = await app.ainvoke(initial)
             return {
@@ -419,7 +457,12 @@ async def _run_hazmat_audit_async(
             }
 
 
-def run_hazmat_audit(package_name: str, manager: str = "pip", package_source: Optional[str] = None) -> Dict[str, Any]:
+def run_hazmat_audit(
+    package_name: str,
+    manager: str = "pip",
+    package_source: Optional[str] = None,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
     import asyncio
 
     return asyncio.run(
@@ -427,6 +470,7 @@ def run_hazmat_audit(package_name: str, manager: str = "pip", package_source: Op
             package_name=package_name,
             manager=manager,
             package_source=package_source,
+            progress_callback=progress_callback,
         )
     )
 
