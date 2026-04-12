@@ -1,4 +1,5 @@
 #!/usr/bin/env sh
 set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
-exec python3 "$DIR/hazmat_cli.py" "$@"
+export PYTHONPATH="${DIR}/src${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m hazmat_mcp "$@"

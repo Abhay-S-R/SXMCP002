@@ -1,12 +1,21 @@
-# Hazmat-MCP (Prototype)
+# Hazmat-MCP 
 
 Dynamic dependency auditor for suspicious `pip`/`npm` packages using an MCP server + Docker sandbox.
 
-## Current Scope
+## Layout
 
-This prototype currently provides one MCP server file: `hazmat_server.py`.
+| Path | Role |
+|------|------|
+| `src/hazmat_mcp/` | Installable package (`cli`, `agent`, `server`, `sandbox_core`) |
+| `examples/` | Sample batch file and demo inputs |
+| `tests/` | Tests, demo tarball, integration scripts |
+
+## Current scope
+
+MCP server is implemented in `src/hazmat_mcp/server.py` (stdio).
 
 Implemented tools:
+
 - `spin_up_sandbox(manager, session_id, base_image)`
 - `execute_install(package_name, manager)`
 - `get_telemetry()`
@@ -23,18 +32,25 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
+# Editable install so `hazmat` / `python -m hazmat_mcp` resolve imports:
+pip install -e .
 ```
 
-## Run MCP Server
+Without `pip install -e .`, use `./hazmat` (sets `PYTHONPATH=src`) or:
+
+```bash
+export PYTHONPATH="${PWD}/src"
+python3 -m hazmat_mcp --help
+```
+
+## Run MCP server (stdio)
 
 ```bash
 source .venv/bin/activate
-python3 hazmat_server.py
+python3 -m hazmat_mcp.server
 ```
 
-The server runs over stdio transport.
-
-## Expected Tool Flow
+## Expected tool flow
 
 1) Start sandbox
 
@@ -80,9 +96,10 @@ The server runs over stdio transport.
 }
 ```
 
-## Telemetry Shape (Current)
+## Telemetry shape (current)
 
 `get_telemetry()` returns:
+
 - `telemetry.session_id`
 - `telemetry.install.exit_code` and install metadata (if install was executed)
 - `telemetry.network` (`tcp_added`, `tcp6_added`, `verdict`)
@@ -94,9 +111,10 @@ The server runs over stdio transport.
 - First run can be slow because Docker may need to pull base images (`python:3.11-slim` / `node:20-slim`).
 - This is a hackathon-grade baseline, not a production malware sandbox.
 
-## Step 4: LangGraph Agent
+## LangGraph agent
 
 `agent.py` runs the orchestration loop:
+
 1. `spin_up_sandbox`
 2. `execute_install`
 3. `get_telemetry`
@@ -107,23 +125,22 @@ Run it:
 
 ```bash
 source .venv/bin/activate
-python3 agent.py
+python3 -m agent.py
 ```
 
 Override package/manager:
 
 ```bash
-HAZMAT_PACKAGE=requests HAZMAT_MANAGER=pip python3 agent.py
+HAZMAT_PACKAGE=requests HAZMAT_MANAGER=pip python3 -m agent.py
 ```
 
 Optional LLM analysis mode:
+
 - Model-first is enabled by default in this order:
   1) `GEMINI_API_KEY` (`HAZMAT_GEMINI_MODEL`, default `gemini-2.0-flash`)
 - If no model key is set (or model call fails), agent falls back to deterministic rule-based analysis.
 
 ### Timeout runner (recommended for edge-case tests)
-
-Use the helper script to avoid hanging on unresolved package lookups:
 
 ```bash
 chmod +x run_agent_timeout.sh
@@ -132,65 +149,60 @@ chmod +x run_agent_timeout.sh
 ```
 
 The script sets:
+
 - `PIP_DEFAULT_TIMEOUT=10`
 - `PIP_RETRIES=0`
 
-and wraps `python3 agent.py` with a hard timeout.
+and wraps `python3 -m hazmat_mcp.agent` with a hard timeout.
 
-## Step 6: CLI wrapper
+## CLI
 
-Use the CLI for demo-friendly output:
+After `pip install -e .`:
 
 ```bash
-source .venv/bin/activate
-python3 hazmat_cli.py --package requests --manager pip
+hazmat --package requests --manager pip
 ```
 
-For judge/demo reliability, prefer timeout-enforced agent runs for edge/error cases:
+Or from a dev tree:
 
 ```bash
-chmod +x run_agent_timeout.sh
-./run_agent_timeout.sh requests pip 120
-./run_agent_timeout.sh this-package-should-not-exist-xyz123 pip 75
+chmod +x hazmat
+./hazmat --package requests --manager pip
 ```
 
-Raw JSON mode:
+Raw JSON:
 
 ```bash
-python3 hazmat_cli.py --package requests --manager pip --raw-json
+hazmat --package requests --manager pip --raw-json
 ```
 
 Custom timeout:
 
 ```bash
-python3 hazmat_cli.py --package requests --manager npm --timeout 120
+hazmat --package requests --manager npm --timeout 120
 ```
 
-Batch parallel mode (target[,manager] per line):
+Batch parallel mode (`target[,manager]` per line). Example file: `examples/batch_targets.txt`.
 
 ```bash
-cat > batch_targets.txt <<'EOF'
-lodash,npm
-requests,pip
-this-package-should-not-exist-xyz123,pip
-demo_packages/react-helper-dom/react-helper-dom-1.0.0.tgz,npm
-EOF
-
-python3 hazmat_cli.py --batch-file batch_targets.txt --parallel 4
-python3 hazmat_cli.py --batch-file batch_targets.txt --parallel 4 --raw-json
-python3 hazmat_cli.py --batch-file batch_targets.txt --parallel 4 --live
+hazmat --batch-file examples/batch_targets.txt --parallel 4
+hazmat --batch-file examples/batch_targets.txt --parallel 4 --raw-json
+hazmat --batch-file examples/batch_targets.txt --parallel 4 --live
 ```
 
-## Step 7: Integration hardening
-
-Run deterministic hardening checks:
+## Integration hardening
 
 ```bash
-chmod +x scripts/step7_hardening_tests.sh
-./scripts/step7_hardening_tests.sh
+chmod +x tests/scripts/step7_hardening_tests.sh
+./tests/scripts/step7_hardening_tests.sh
 ```
 
-This script validates:
+This validates:
+
 - manager mismatch detection
 - nonexistent package handling through timeout runner
-- malicious local `.tgz` payload detection
+- malicious local `.tgz` payload detection (`tests/demo_packages/...`)
+
+## PyPI / packaging
+
+Build and install from `pyproject.toml` (`hazmat-mcp` distribution, `hazmat` console script). See `[project]` and `[project.scripts]` in `pyproject.toml`.

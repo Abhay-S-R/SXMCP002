@@ -1,0 +1,4 @@
+lodash,npm
+requests,pip
+this-package-should-not-exist-xyz123,pip
+tests/demo_packages/react-helper-dom/react-helper-dom-1.0.0.tgz,npm

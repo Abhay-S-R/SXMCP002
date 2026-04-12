@@ -429,7 +429,7 @@ def _run_with_timeout(
             expand=True,
         )
 
-    from agent import run_hazmat_audit
+    from hazmat_mcp.agent import run_hazmat_audit
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(run_hazmat_audit, package_name, manager, package_source, _set_progress)
         start = time.time()
@@ -717,7 +717,7 @@ def _run_batch_live_dashboard(specs: List[Dict[str, str]], timeout_s: int, worke
 
 def main() -> None:
     invoked = os.path.basename(sys.argv[0])
-    prog = "hazmat" if invoked == "hazmat_cli.py" else invoked
+    prog = "hazmat" if invoked in ("hazmat_cli.py", "__main__.py") else invoked
     parser = argparse.ArgumentParser(prog=prog, description="Hazmat-MCP CLI wrapper for package audits")
     parser.add_argument("--package", help="Package name (PyPI/npm)")
     parser.add_argument("--package-source", help="Local package artifact path (e.g. .tgz)")

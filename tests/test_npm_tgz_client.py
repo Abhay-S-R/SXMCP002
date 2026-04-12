@@ -10,7 +10,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 async def run_tests() -> None:
     server_params = StdioServerParameters(
         command=sys.executable,
-        args=["hazmat_server.py"],
+        args=["-m", "hazmat_mcp.server"],
         env=os.environ.copy(),
     )
 

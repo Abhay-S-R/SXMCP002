@@ -6,8 +6,9 @@ set -euo pipefail
 # 2) nonexistent package (timeout-enforced path)
 # 3) malicious local payload detection
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT_DIR}"
+export PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:$PYTHONPATH}"
 
 if [[ ! -d ".venv" ]]; then
   echo "ERROR: .venv not found. Create and install dependencies first."
@@ -23,7 +24,7 @@ echo "== Step 7 hardening checks =="
 echo
 
 echo "[1/3] Manager mismatch test (npm package via pip)"
-python3 hazmat_cli.py --manager pip --package lodash --raw-json > "${OUT_DIR}/manager_mismatch.json"
+python3 -m hazmat_mcp.cli --manager pip --package lodash --raw-json > "${OUT_DIR}/manager_mismatch.json"
 python3 - <<'PY'
 import json
 from pathlib import Path
@@ -40,7 +41,7 @@ echo
 
 echo "[2/3] Nonexistent package test (timeout runner path)"
 set +e
-./run_agent_timeout.sh this-package-should-not-exist-xyz123 pip 75 > "${OUT_DIR}/nonexistent.log" 2>&1
+"${ROOT_DIR}/run_agent_timeout.sh" this-package-should-not-exist-xyz123 pip 75 > "${OUT_DIR}/nonexistent.log" 2>&1
 status=$?
 set -e
 if [[ "${status}" -eq 124 ]]; then
@@ -63,9 +64,9 @@ PY
 echo
 
 echo "[3/3] Malicious local payload detection (.tgz)"
-python3 hazmat_cli.py \
+python3 -m hazmat_mcp.cli \
   --manager npm \
-  --package-source "${ROOT_DIR}/demo_packages/react-helper-dom/react-helper-dom-1.0.0.tgz" \
+  --package-source "${ROOT_DIR}/tests/demo_packages/react-helper-dom/react-helper-dom-1.0.0.tgz" \
   --raw-json > "${OUT_DIR}/malicious_tgz.json"
 python3 - <<'PY'
 import json

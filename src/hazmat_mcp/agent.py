@@ -427,7 +427,7 @@ async def _run_hazmat_audit_async(
     app = _build_graph()
     server_params = StdioServerParameters(
         command=sys.executable,
-        args=["hazmat_server.py"],
+        args=["-m", "hazmat_mcp.server"],
         env=os.environ.copy(),
     )
     async with stdio_client(server_params) as (read, write):

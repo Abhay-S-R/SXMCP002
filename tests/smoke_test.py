@@ -1,5 +1,14 @@
 import json
-import hazmat_server as hz
+import sys
+from pathlib import Path
+
+# Allow `python tests/smoke_test.py` without `pip install -e .`
+_ROOT = Path(__file__).resolve().parents[1]
+_SRC = _ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+import hazmat_mcp.server as hz
 
 print("1) spin_up_sandbox")
 resp1 = json.loads(hz.spin_up_sandbox(manager="pip", session_id="demo-001"))

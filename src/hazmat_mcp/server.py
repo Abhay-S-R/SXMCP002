@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from sandbox_core import (
+from hazmat_mcp.sandbox_core import (
     Baseline,
     docker_client,
     _exec,

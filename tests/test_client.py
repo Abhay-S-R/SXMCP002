@@ -5,11 +5,11 @@ from mcp.client.stdio import stdio_client, StdioServerParameters
 from mcp.client.session import ClientSession
 
 async def run_tests():
-    # Setup parameters to launch hazmat_server.py via stdio
+    # Launch MCP server package via stdio
     server_params = StdioServerParameters(
         command=sys.executable,
-        args=["hazmat_server.py"],
-        env=os.environ.copy()
+        args=["-m", "hazmat_mcp.server"],
+        env=os.environ.copy(),
     )
 
     print("🔌 Starting MCP Server test sequence...\n")

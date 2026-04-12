@@ -12,17 +12,20 @@ PACKAGE_NAME="${1:-requests}"
 MANAGER="${2:-pip}"
 TIMEOUT_SECONDS="${3:-120}"
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="${ROOT}/src${PYTHONPATH:+:$PYTHONPATH}"
+
 if ! command -v timeout >/dev/null 2>&1; then
   echo "ERROR: 'timeout' command not found. Install coreutils."
   exit 1
 fi
 
-if [[ ! -d ".venv" ]]; then
+if [[ ! -d "${ROOT}/.venv" ]]; then
   echo "ERROR: .venv not found in repo root."
   exit 1
 fi
 
-source ".venv/bin/activate"
+source "${ROOT}/.venv/bin/activate"
 
 # Keep dependency-resolution failures fast/predictable during demos.
 export PIP_DEFAULT_TIMEOUT="${PIP_DEFAULT_TIMEOUT:-10}"
@@ -37,7 +40,7 @@ echo "  timeout: ${TIMEOUT_SECONDS}s"
 echo
 
 # Exit code 124 indicates timeout.
-timeout "${TIMEOUT_SECONDS}"s python3 agent.py || {
+timeout "${TIMEOUT_SECONDS}"s python3 -m hazmat_mcp.agent || {
   code=$?
   if [[ "${code}" -eq 124 ]]; then
     echo

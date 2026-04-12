@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hazmat"
+version = "0.1.0"
+description = "Dynamic pip/npm package auditor using MCP and Docker sandboxes"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Hazmat-MCP contributors" }]
+keywords = ["security", "supply-chain", "mcp", "docker", "pip", "npm"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Security",
+]
+
+dependencies = [
+  "docker>=7.0",
+  "google-genai>=1.70",
+  "langgraph>=1.1",
+  "mcp>=1.27",
+  "pydantic>=2.0",
+  "python-dotenv>=1.0",
+  "rich>=14.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+hazmat = "hazmat_mcp.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
